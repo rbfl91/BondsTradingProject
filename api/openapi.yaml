@@ -1,0 +1,394 @@
+openapi: 3.0.3
+info:
+  title: Bonds Trading API
+  version: 1.0.0
+  description: |
+    API for interacting with the Bond Trading smart contract.
+servers:
+  - url: http://localhost:5000
+    description: Local development server
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+  /contract/address:
+    get:
+      summary: Get the contract address
+      responses:
+        '200':
+          description: Contract address returned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  contract_address:
+                    type: string
+                    example: "0x0000000000000000000000000000000000000000"
+  /bond/issue:
+    post:
+      summary: Issue a new bond
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IssueBondRequest'
+      responses:
+        '201':
+          description: Bond issued successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssueBondResponse'
+        '400':
+          description: Missing required parameters
+        '500':
+          description: Server error
+  /bond/purchase:
+    post:
+      summary: Purchase a bond
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PurchaseBondRequest'
+      responses:
+        '200':
+          description: Bond purchased successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchaseBondResponse'
+        '400':
+          description: Missing required parameters
+        '500':
+          description: Server error
+  /bond/sell:
+    post:
+      summary: Sell a bond
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SellBondRequest'
+      responses:
+        '200':
+          description: Bond sold successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SellBondResponse'
+        '400':
+          description: Missing required parameters
+        '500':
+          description: Server error
+  /bond/redeem:
+    post:
+      summary: Redeem a bond
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RedeemBondRequest'
+      responses:
+        '200':
+          description: Bond redeemed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RedeemBondResponse'
+        '400':
+          description: Missing required parameters
+        '500':
+          description: Server error
+  /bond/{bond_id}/info:
+    get:
+      summary: Get information about a specific bond
+      parameters:
+        - name: bond_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Bond information retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetBondInfoResponse'
+        '500':
+          description: Server error
+  /bond/{bond_id}/holders:
+    get:
+      summary: Get list of holders for a specific bond
+      parameters:
+        - name: bond_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Bond holders retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetBondHoldersResponse'
+        '500':
+          description: Server error
+  /bond/{bond_id}/holder/{holder_address}/amount:
+    get:
+      summary: Get the amount of bonds a specific holder has
+      parameters:
+        - name: bond_id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: holder_address
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Bond holder amount retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetBondHolderAmountResponse'
+        '500':
+          description: Server error
+  /status:
+    get:
+      summary: Get API status information
+      responses:
+        '200':
+          description: API status returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiStatusResponse'
+components:
+  schemas:
+    IssueBondRequest:
+      type: object
+      required:
+        - name
+        - issuer
+        - faceValue
+        - maturityDate
+        - interestRate
+        - supply
+      properties:
+        name:
+          type: string
+        issuer:
+          type: string
+        faceValue:
+          type: integer
+        maturityDate:
+          type: integer
+        interestRate:
+          type: integer
+        supply:
+          type: integer
+      example:
+        name: "Corporate Bond"
+        issuer: "Acme Corp"
+        faceValue: 1000
+        maturityDate: 1735689600
+        interestRate: 5
+        supply: 10000
+    IssueBondResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: Bond issued successfully
+        name:
+          type: string
+        issuer:
+          type: string
+        faceValue:
+          type: integer
+        maturityDate:
+          type: integer
+        interestRate:
+          type: integer
+        supply:
+          type: integer
+      example:
+        message: "Bond issued successfully"
+        name: "Corporate Bond"
+        issuer: "Acme Corp"
+        faceValue: 1000
+        maturityDate: 1735689600
+        interestRate: 5
+        supply: 10000
+    PurchaseBondRequest:
+      type: object
+      required:
+        - bondId
+        - amount
+      properties:
+        bondId:
+          type: integer
+        amount:
+          type: integer
+      example:
+        bondId: 1
+        amount: 10
+    PurchaseBondResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: Bond purchased successfully
+        bondId:
+          type: integer
+        amount:
+          type: integer
+      example:
+        message: "Bond purchased successfully"
+        bondId: 1
+        amount: 10
+    SellBondRequest:
+      type: object
+      required:
+        - bondId
+        - amount
+        - buyerAddress
+      properties:
+        bondId:
+          type: integer
+        amount:
+          type: integer
+        buyerAddress:
+          type: string
+      example:
+        bondId: 1
+        amount: 5
+        buyerAddress: "0x1234567890abcdef1234567890abcdef12345678"
+    SellBondResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: Bond sold successfully
+        bondId:
+          type: integer
+        amount:
+          type: integer
+        buyerAddress:
+          type: string
+      example:
+        message: "Bond sold successfully"
+        bondId: 1
+        amount: 5
+        buyerAddress: "0x1234567890abcdef1234567890abcdef12345678"
+    RedeemBondRequest:
+      type: object
+      required:
+        - bondId
+        - amount
+      properties:
+        bondId:
+          type: integer
+        amount:
+          type: integer
+      example:
+        bondId: 1
+        amount: 10
+    RedeemBondResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: Bond redeemed successfully
+        bondId:
+          type: integer
+        amount:
+          type: integer
+      example:
+        message: "Bond redeemed successfully"
+        bondId: 1
+        amount: 10
+    GetBondInfoResponse:
+      type: object
+      properties:
+        bondId:
+          type: integer
+        message:
+          type: string
+          example: Bond information retrieved successfully
+      example:
+        bondId: 1
+        message: "Bond information retrieved successfully"
+    GetBondHoldersResponse:
+      type: object
+      properties:
+        bondId:
+          type: integer
+        message:
+          type: string
+          example: Bond holders retrieved successfully
+      example:
+        bondId: 1
+        message: "Bond holders retrieved successfully"
+    GetBondHolderAmountResponse:
+      type: object
+      properties:
+        bondId:
+          type: integer
+        holderAddress:
+          type: string
+        message:
+          type: string
+          example: Bond holder amount retrieved successfully
+      example:
+        bondId: 1
+        holderAddress: "0x1234567890abcdef1234567890abcdef12345678"
+        message: "Bond holder amount retrieved successfully"
+    ApiStatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: API is running
+        blockchain_connected:
+          type: boolean
+        endpoints:
+          type: array
+          items:
+            type: string
+      example:
+        status: "API is running"
+        blockchain_connected: true
+        endpoints:
+          - "/health"
+          - "/contract/address"
+          - "/bond/issue"
+          - "/bond/purchase"
+          - "/bond/sell"
+          - "/bond/redeem"
+          - "/bond/{bond_id}/info"
+          - "/bond/{bond_id}/holders"
+          - "/bond/{bond_id}/holder/{holder_address}/amount"
+          - "/status"

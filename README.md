@@ -1,61 +1,82 @@
-# Bonds Redbelly MVP
+# Bond Trading API
 
-This is a minimal viable product (MVP) for a bonds trading platform built on Ethereum. The project includes two smart contracts:
+A Python REST API that provides endpoints to interact with Bond Trading smart contracts.
 
-## Contracts
+## Features
 
-### BondToken.sol
-- An ERC20 token implementation for representing bond ownership
-- Initial supply of 1 million tokens
-- Ownable contract with minting capabilities
+- Issue new bonds
+- Purchase bonds
+- Sell bonds
+- Redeem bonds
+- Retrieve bond information
+- Retrieve bond holder information
 
-### BondTrading.sol
-- Main contract for issuing, purchasing, selling, and redeeming bonds
-- Manages bond information and ownership
-- Implements core bond trading functionality
-- Uses the BondToken for representing bond ownership
+## Endpoints
 
-## Features Implemented
+### General
+- `GET /health` - Health check
+- `GET /status` - API status information
+- `GET /contract/address` - Get contract address
 
-1. **Bond Issuance**: Owners can create new bonds with name, issuer, face value, maturity date, interest rate, and supply
-2. **Bond Purchase**: Users can purchase bonds by transferring tokens to the contract
-3. **Bond Sale**: Users can sell bonds to other users
-4. **Bond Redemption**: Users can redeem bonds (burning the tokens)
-5. **Bond Information**: Query bond details and holder information
+### Bond Operations
+- `POST /bond/issue` - Issue a new bond
+- `POST /bond/purchase` - Purchase a bond
+- `POST /bond/sell` - Sell a bond
+- `POST /bond/redeem` - Redeem a bond
 
-## Key Functionality
-
-- **Ownable**: Only the owner can issue new bonds
-- **Token-based**: All bond transactions are represented using ERC20 tokens
-- **Security**: Implements proper checks for balances, approvals, and bond status
-- **Events**: Emits events for all major operations (bond issuance, purchases, sales)
-
-## Deployment
-
-The project is configured for deployment using Truffle. The migration script deploys both contracts to the development network.
-
-## Testing
-
-The project includes comprehensive tests that verify:
-- Bond issuance functionality
-- Bond purchase functionality
-- Bond sale functionality
-- Proper event emissions
-- Security checks
-
-## Requirements
-
-- Node.js (v12 or higher recommended)
-- Truffle (v5.x)
-- Ganache or other Ethereum client for testing
+### Bond Information
+- `GET /bond/<bond_id>/info` - Get bond information
+- `GET /bond/<bond_id>/holders` - Get list of bond holders
+- `GET /bond/<bond_id>/holder/<holder_address>/amount` - Get amount of bonds held by a specific address
 
 ## Setup
 
-1. Install dependencies: `npm install`
-2. Compile contracts: `npx truffle compile`
-3. Run tests: `npx truffle test`
-4. Deploy: `npx truffle deploy`
+1. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-## License
+2. Set up a local blockchain (e.g., Ganache or Hardhat)
 
-MIT
+3. Deploy the BondToken and BondTrading contracts to your local blockchain
+
+4. Update `.env` file with contract details:
+```env
+WEB3_PROVIDER=http://127.0.0.1:8545
+CONTRACT_ADDRESS=0x...
+```
+
+5. Run the API:
+```bash
+cd api && python app.py
+```
+
+## Example Usage
+
+### Issue a Bond
+```bash
+curl -X POST http://localhost:5000/bond/issue \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Test Bond",
+    "issuer": "Test Issuer",
+    "faceValue": 1000,
+    "maturityDate": 1735689600,
+    "interestRate": 500,
+    "supply": 1000
+  }'
+```
+
+### Purchase a Bond
+```bash
+curl -X POST http://localhost:5000/bond/purchase \
+  -H "Content-Type: application/json" \
+  -d '{
+    "bondId": 1,
+    "amount": 100
+  }'
+```
+
+### Get Bond Info
+```bash
+curl -X GET http://localhost:5000/bond/1/info
