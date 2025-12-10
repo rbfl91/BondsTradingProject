@@ -1,17 +1,31 @@
 from flask import Flask, request, jsonify, send_from_directory
 from web3 import Web3
 import json
-from config import WEB3_PROVIDER, DEFAULT_WEB3_PROVIDER
+from .config import WEB3_PROVIDER, DEFAULT_WEB3_PROVIDER, CONTRACT_ADDRESS
 import os
 
 # Initialize Flask app
 app = Flask(__name__)
 
+# Global variables for blockchain connection and contract
+w3 = None
+contract = None
+
 @app.before_request
 def ensure_connection():
-    global w3
-    if w3 is None or not w3.is_connected():
-        w3 = connect_to_blockchain()
+    global w3, contract
+    # Only attempt to connect if a contract address is configured.
+    # When running unit tests we may mock ``w3`` and ``contract``; in that case
+    # ``w3`` might not have an ``is_connected`` attribute. Guard against that
+    # to avoid AttributeError during the request lifecycle.
+    if CONTRACT_ADDRESS:
+        # Connect if we have never connected, or if the existing client reports
+        # it is not connected (and the method exists).
+        if w3 is None or (hasattr(w3, "is_connected") and not w3.is_connected()):
+            w3 = connect_to_blockchain()
+        # Initialise the contract object only when we have a live client.
+        if contract is None and w3 is not None:
+            contract = w3.eth.contract(address=CONTRACT_ADDRESS, abi=get_contract_abi())
 
 # Connect to blockchain
 def connect_to_blockchain():
@@ -32,10 +46,19 @@ def connect_to_blockchain():
         print(f"Blockchain connection error: {e}")
         return None
 
-# Load contract ABI
-def load_contract_abi():
-    # In a real application, you'd load this from a file or contract deployment
-    # For now, we'll define it here based on the Solidity contract
+# Load contract ABI from the build artifacts or define it inline
+def get_contract_abi():
+    # Try to load ABI from build artifacts first
+    try:
+        abi_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'build', 'contracts', 'BondTrading.json')
+        if os.path.exists(abi_path):
+            with open(abi_path, 'r') as f:
+                contract_json = json.load(f)
+                return contract_json.get('abi', [])
+    except Exception as e:
+        print(f"Failed to load ABI from file: {e}")
+    
+    # Fallback to inline ABI definition matching the actual BondTrading.sol contract
     abi = [
         {
             "inputs": [
@@ -44,6 +67,62 @@ def load_contract_abi():
             ],
             "stateMutability": "nonpayable",
             "type": "constructor"
+        },
+        {
+            "anonymous": False,
+            "inputs": [
+                {"indexed": False, "internalType": "uint256", "name": "bondId", "type": "uint256"},
+                {"indexed": False, "internalType": "string", "name": "name", "type": "string"},
+                {"indexed": False, "internalType": "string", "name": "issuer", "type": "string"},
+                {"indexed": False, "internalType": "uint256", "name": "faceValue", "type": "uint256"}
+            ],
+            "name": "BondIssued",
+            "type": "event"
+        },
+        {
+            "anonymous": False,
+            "inputs": [
+                {"indexed": False, "internalType": "uint256", "name": "bondId", "type": "uint256"},
+                {"indexed": False, "internalType": "address", "name": "buyer", "type": "address"},
+                {"indexed": False, "internalType": "uint256", "name": "amount", "type": "uint256"}
+            ],
+            "name": "BondPurchased",
+            "type": "event"
+        },
+        {
+            "anonymous": False,
+            "inputs": [
+                {"indexed": False, "internalType": "uint256", "name": "bondId", "type": "uint256"},
+                {"indexed": False, "internalType": "address", "name": "seller", "type": "address"},
+                {"indexed": False, "internalType": "address", "name": "buyer", "type": "address"},
+                {"indexed": False, "internalType": "uint256", "name": "amount", "type": "uint256"}
+            ],
+            "name": "BondSold",
+            "type": "event"
+        },
+        {
+            "inputs": [
+                {"internalType": "string", "name": "_name", "type": "string"},
+                {"internalType": "string", "name": "_issuer", "type": "string"},
+                {"internalType": "uint256", "name": "_faceValue", "type": "uint256"},
+                {"internalType": "uint256", "name": "_maturityDate", "type": "uint256"},
+                {"internalType": "uint256", "name": "_interestRate", "type": "uint256"},
+                {"internalType": "uint256", "name": "_supply", "type": "uint256"}
+            ],
+            "name": "issueBond",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
+        },
+        {
+            "inputs": [
+                {"internalType": "uint256", "name": "_bondId", "type": "uint256"},
+                {"internalType": "uint256", "name": "_amount", "type": "uint256"}
+            ],
+            "name": "purchaseBond",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
         },
         {
             "inputs": [
@@ -70,26 +149,22 @@ def load_contract_abi():
             "inputs": [
                 {"internalType": "uint256", "name": "_bondId", "type": "uint256"}
             ],
-            "name": "getBondHolderAmount",
-            "outputs": [
-                {"internalType": "uint256", "name": "", "type": "uint256"}
-            ],
-            "stateMutability": "view",
-            "type": "function"
-        },
-        {
-            "inputs": [
-                {"internalType": "uint256", "name": "_bondId", "type": "uint256"}
-            ],
             "name": "getBondInfo",
             "outputs": [
-                {"internalType": "string", "name": "name", "type": "string"},
-                {"internalType": "string", "name": "issuer", "type": "string"},
-                {"internalType": "uint256", "name": "faceValue", "type": "uint256"},
-                {"internalType": "uint256", "name": "maturityDate", "type": "uint256"},
-                {"internalType": "uint256", "name": "interestRate", "type": "uint256"},
-                {"internalType": "uint256", "name": "totalSupply", "type": "uint256"},
-                {"internalType": "bool", "name": "isActive", "type": "bool"}
+                {
+                    "components": [
+                        {"internalType": "string", "name": "name", "type": "string"},
+                        {"internalType": "string", "name": "issuer", "type": "string"},
+                        {"internalType": "uint256", "name": "faceValue", "type": "uint256"},
+                        {"internalType": "uint256", "name": "maturityDate", "type": "uint256"},
+                        {"internalType": "uint256", "name": "interestRate", "type": "uint256"},
+                        {"internalType": "uint256", "name": "totalSupply", "type": "uint256"},
+                        {"internalType": "bool", "name": "isActive", "type": "bool"}
+                    ],
+                    "internalType": "struct BondTrading.Bond",
+                    "name": "",
+                    "type": "tuple"
+                }
             ],
             "stateMutability": "view",
             "type": "function"
@@ -107,36 +182,31 @@ def load_contract_abi():
         },
         {
             "inputs": [
-                {"internalType": "string", "name": "_name", "type": "string"},
-                {"internalType": "string", "name": "_issuer", "type": "string"},
-                {"internalType": "uint256", "name": "_faceValue", "type": "uint256"},
-                {"internalType": "uint256", "name": "_maturityDate", "type": "uint256"},
-                {"internalType": "uint256", "name": "_interestRate", "type": "uint256"},
-                {"internalType": "uint256", "name": "_supply", "type": "uint256"}
+                {"internalType": "uint256", "name": "_bondId", "type": "uint256"},
+                {"internalType": "address", "name": "_holder", "type": "address"}
             ],
-            "name": "issueBond",
-            "outputs": [],
-            "stateMutability": "nonpayable",
+            "name": "getBondHolderAmount",
+            "outputs": [
+                {"internalType": "uint256", "name": "", "type": "uint256"}
+            ],
+            "stateMutability": "view",
             "type": "function"
         },
         {
-            "inputs": [
-                {"internalType": "uint256", "name": "_bondId", "type": "uint256"},
-                {"internalType": "uint256", "name": "_amount", "type": "uint256"}
+            "inputs": [],
+            "name": "bondCount",
+            "outputs": [
+                {"internalType": "uint256", "name": "", "type": "uint256"}
             ],
-            "name": "purchaseBond",
-            "outputs": [],
-            "stateMutability": "nonpayable",
+            "stateMutability": "view",
             "type": "function"
         }
     ]
     return abi
 
-# Initialize blockchain connection
-w3 = connect_to_blockchain()
-
-# Load contract ABI
-contract_abi = load_contract_abi()
+# Initialize blockchain connection placeholders
+w3 = None
+contract = None
 
 # The main API endpoints
 @app.route('/health', methods=['GET'])
@@ -147,15 +217,14 @@ def health_check():
 @app.route('/contract/address', methods=['GET'])
 def get_contract_address():
     """Get the contract address"""
-    # This would be set during deployment
-    return jsonify({"contract_address": "0x0000000000000000000000000000000000000000"})
+    return jsonify({"contract_address": CONTRACT_ADDRESS if CONTRACT_ADDRESS else "Not configured"})
 
 @app.route('/bond/issue', methods=['POST'])
 def issue_bond():
-    """Issue a new bond"""
+    """Issue a new bond - calls the smart contract's issueBond function"""
     try:
-        if w3 is None:
-            return jsonify({"error": "Failed to connect to blockchain"}), 500
+        if w3 is None or contract is None:
+            return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
         
         data = request.get_json()
         
@@ -168,7 +237,8 @@ def issue_bond():
         supply = data.get('supply')
         
         # Validate required fields
-        if not all([name, issuer, face_value, maturity_date, interest_rate, supply]):
+        if not all([name, issuer, face_value is not None, maturity_date is not None, 
+                    interest_rate is not None, supply is not None]):
             return jsonify({"error": "Missing required parameters"}), 400
         
         # Convert to appropriate types
@@ -177,27 +247,55 @@ def issue_bond():
         interest_rate = int(interest_rate)
         supply = int(supply)
         
-        # Here we would need to deploy the contract and get its address
-        # For now, we'll return a success message
-        return jsonify({
-            "message": "Bond issued successfully",
-            "name": name,
-            "issuer": issuer,
-            "faceValue": face_value,
-            "maturityDate": maturity_date,
-            "interestRate": interest_rate,
-            "supply": supply
-        }), 201
+        # Prepare and execute the smart contract transaction
+        tx = contract.functions.issueBond(name, issuer, face_value, maturity_date, interest_rate, supply)
+        try:
+            # Estimate gas for the transaction
+            gas_estimate = tx.estimate_gas({'from': w3.eth.default_account})
+            # Send transaction to the blockchain
+            tx_hash = tx.transact({'from': w3.eth.default_account, 'gas': gas_estimate})
+            # Wait for transaction to be mined
+            tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+            
+            if tx_receipt.status != 1:
+                return jsonify({"error": "Transaction failed on blockchain"}), 500
+            
+            # Ensure tx_hash is a hex string regardless of its type
+            tx_hash_str = tx_hash.hex() if hasattr(tx_hash, "hex") else str(tx_hash)
+            
+            # Extract bondId from the BondIssued event logs
+            bond_id = "Unknown"
+            if tx_receipt.logs:
+                try:
+                    # Try to decode the BondIssued event
+                    for log in tx_receipt.logs:
+                        try:
+                            decoded = contract.events.BondIssued().process_log(log)
+                            bond_id = decoded['args']['bondId']
+                            break
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+            
+            return jsonify({
+                "message": "Bond issued successfully",
+                "tx_hash": tx_hash_str,
+                "bondId": bond_id
+            }), 201
+            
+        except Exception as e:
+            return jsonify({"error": f"Smart contract transaction failed: {str(e)}"}), 500
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route('/bond/purchase', methods=['POST'])
 def purchase_bond():
-    """Purchase a bond"""
+    """Purchase a bond - calls the smart contract's purchaseBond function"""
     try:
-        if w3 is None:
-            return jsonify({"error": "Failed to connect to blockchain"}), 500
+        if w3 is None or contract is None:
+            return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
         
         data = request.get_json()
         
@@ -206,29 +304,48 @@ def purchase_bond():
         amount = data.get('amount')
         
         # Validate required fields
-        if not all([bond_id, amount]):
+        if bond_id is None or amount is None:
             return jsonify({"error": "Missing required parameters"}), 400
         
         # Convert to appropriate types
         bond_id = int(bond_id)
         amount = int(amount)
         
-        # Here we would actually call the contract function
-        return jsonify({
-            "message": "Bond purchased successfully",
-            "bondId": bond_id,
-            "amount": amount
-        }), 200
+        # Prepare and execute the smart contract transaction
+        tx = contract.functions.purchaseBond(bond_id, amount)
+        try:
+            # Estimate gas for the transaction
+            gas_estimate = tx.estimate_gas({'from': w3.eth.default_account})
+            # Send transaction to the blockchain
+            tx_hash = tx.transact({'from': w3.eth.default_account, 'gas': gas_estimate})
+            # Wait for transaction to be mined
+            tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+            
+            if tx_receipt.status != 1:
+                return jsonify({"error": "Transaction failed on blockchain"}), 500
+            
+            # Ensure tx_hash is a hex string regardless of its type
+            tx_hash_str = tx_hash.hex() if hasattr(tx_hash, "hex") else str(tx_hash)
+            
+            return jsonify({
+                "message": "Bond purchased successfully",
+                "tx_hash": tx_hash_str,
+                "bondId": bond_id,
+                "amount": amount
+            }), 200
+            
+        except Exception as e:
+            return jsonify({"error": f"Smart contract transaction failed: {str(e)}"}), 500
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route('/bond/sell', methods=['POST'])
 def sell_bond():
-    """Sell a bond"""
+    """Sell a bond - calls the smart contract's sellBond function"""
     try:
-        if w3 is None:
-            return jsonify({"error": "Failed to connect to blockchain"}), 500
+        if w3 is None or contract is None:
+            return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
         
         data = request.get_json()
         
@@ -238,30 +355,55 @@ def sell_bond():
         buyer_address = data.get('buyerAddress')
         
         # Validate required fields
-        if not all([bond_id, amount, buyer_address]):
+        if bond_id is None or amount is None or not buyer_address:
             return jsonify({"error": "Missing required parameters"}), 400
         
         # Convert to appropriate types
         bond_id = int(bond_id)
         amount = int(amount)
         
-        # Here we would actually call the contract function
-        return jsonify({
-            "message": "Bond sold successfully",
-            "bondId": bond_id,
-            "amount": amount,
-            "buyerAddress": buyer_address
-        }), 200
+        # Convert buyer address to checksum format
+        try:
+            buyer_address = w3.to_checksum_address(buyer_address)
+        except Exception:
+            return jsonify({"error": "Invalid buyer address format"}), 400
+        
+        # Prepare and execute the smart contract transaction
+        tx = contract.functions.sellBond(bond_id, amount, buyer_address)
+        try:
+            # Estimate gas for the transaction
+            gas_estimate = tx.estimate_gas({'from': w3.eth.default_account})
+            # Send transaction to the blockchain
+            tx_hash = tx.transact({'from': w3.eth.default_account, 'gas': gas_estimate})
+            # Wait for transaction to be mined
+            tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+            
+            if tx_receipt.status != 1:
+                return jsonify({"error": "Transaction failed on blockchain"}), 500
+            
+            # Ensure tx_hash is a hex string regardless of its type
+            tx_hash_str = tx_hash.hex() if hasattr(tx_hash, "hex") else str(tx_hash)
+            
+            return jsonify({
+                "message": "Bond sold successfully",
+                "tx_hash": tx_hash_str,
+                "bondId": bond_id,
+                "amount": amount,
+                "buyerAddress": buyer_address
+            }), 200
+            
+        except Exception as e:
+            return jsonify({"error": f"Smart contract transaction failed: {str(e)}"}), 500
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route('/bond/redeem', methods=['POST'])
 def redeem_bond():
-    """Redeem a bond"""
+    """Redeem a bond - calls the smart contract's redeemBond function"""
     try:
-        if w3 is None:
-            return jsonify({"error": "Failed to connect to blockchain"}), 500
+        if w3 is None or contract is None:
+            return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
         
         data = request.get_json()
         
@@ -270,85 +412,175 @@ def redeem_bond():
         amount = data.get('amount')
         
         # Validate required fields
-        if not all([bond_id, amount]):
+        if bond_id is None or amount is None:
             return jsonify({"error": "Missing required parameters"}), 400
         
         # Convert to appropriate types
         bond_id = int(bond_id)
         amount = int(amount)
         
-        # Here we would actually call the contract function
-        return jsonify({
-            "message": "Bond redeemed successfully",
-            "bondId": bond_id,
-            "amount": amount
-        }), 200
+        # Prepare and execute the smart contract transaction
+        tx = contract.functions.redeemBond(bond_id, amount)
+        try:
+            # Estimate gas for the transaction
+            gas_estimate = tx.estimate_gas({'from': w3.eth.default_account})
+            # Send transaction to the blockchain
+            tx_hash = tx.transact({'from': w3.eth.default_account, 'gas': gas_estimate})
+            # Wait for transaction to be mined
+            tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+            
+            if tx_receipt.status != 1:
+                return jsonify({"error": "Transaction failed on blockchain"}), 500
+            
+            # Ensure tx_hash is a hex string regardless of its type
+            tx_hash_str = tx_hash.hex() if hasattr(tx_hash, "hex") else str(tx_hash)
+            
+            return jsonify({
+                "message": "Bond redeemed successfully",
+                "tx_hash": tx_hash_str,
+                "bondId": bond_id,
+                "amount": amount
+            }), 200
+            
+        except Exception as e:
+            return jsonify({"error": f"Smart contract transaction failed: {str(e)}"}), 500
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route('/bond/<int:bond_id>/info', methods=['GET'])
 def get_bond_info(bond_id):
-    """Get information about a specific bond"""
+    """Get information about a specific bond - calls the smart contract's getBondInfo function"""
     try:
-        if w3 is None:
-            return jsonify({"error": "Failed to connect to blockchain"}), 500
+        if w3 is None or contract is None:
+            return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
         
-        # Here we would actually call the contract function
-        return jsonify({
-            "bondId": bond_id,
-            "message": "Bond information retrieved successfully"
-        }), 200
+        # Call the smart contract view function to get bond info
+        try:
+            bond_info = contract.functions.getBondInfo(bond_id).call()
+            
+            # The contract returns a tuple/struct with bond information
+            # Handle both tuple format and named struct format
+            if isinstance(bond_info, dict):
+                return jsonify({
+                    "bondId": bond_id,
+                    "name": bond_info.get('name', ''),
+                    "issuer": bond_info.get('issuer', ''),
+                    "faceValue": bond_info.get('faceValue', 0),
+                    "maturityDate": bond_info.get('maturityDate', 0),
+                    "interestRate": bond_info.get('interestRate', 0),
+                    "totalSupply": bond_info.get('totalSupply', 0),
+                    "isActive": bond_info.get('isActive', False)
+                }), 200
+            else:
+                # Tuple format
+                return jsonify({
+                    "bondId": bond_id,
+                    "name": bond_info[0],
+                    "issuer": bond_info[1],
+                    "faceValue": bond_info[2],
+                    "maturityDate": bond_info[3],
+                    "interestRate": bond_info[4],
+                    "totalSupply": bond_info[5],
+                    "isActive": bond_info[6]
+                }), 200
+                
+        except Exception as e:
+            return jsonify({"error": f"Failed to retrieve bond info from smart contract: {str(e)}"}), 500
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route('/bond/<int:bond_id>/holders', methods=['GET'])
 def get_bond_holders(bond_id):
-    """Get list of holders for a specific bond"""
+    """Get list of holders for a specific bond - calls the smart contract's getBondHolders function"""
     try:
-        if w3 is None:
-            return jsonify({"error": "Failed to connect to blockchain"}), 500
+        if w3 is None or contract is None:
+            return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
         
-        # Here we would actually call the contract function
-        return jsonify({
-            "bondId": bond_id,
-            "message": "Bond holders retrieved successfully"
-        }), 200
+        # Call the smart contract view function to get bond holders
+        try:
+            holders = contract.functions.getBondHolders(bond_id).call()
+            return jsonify({
+                "bondId": bond_id,
+                "holders": holders
+            }), 200
+        except Exception as e:
+            return jsonify({"error": f"Failed to retrieve bond holders from smart contract: {str(e)}"}), 500
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route('/bond/<int:bond_id>/holder/<holder_address>/amount', methods=['GET'])
 def get_bond_holder_amount(bond_id, holder_address):
-    """Get the amount of bonds a specific holder has"""
+    """Get the amount of bonds a specific holder has - calls the smart contract's getBondHolderAmount function"""
     try:
-        if w3 is None:
-            return jsonify({"error": "Failed to connect to blockchain"}), 500
+        if w3 is None or contract is None:
+            return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
         
-        # Here we would actually call the contract function
-        return jsonify({
-            "bondId": bond_id,
-            "holderAddress": holder_address,
-            "message": "Bond holder amount retrieved successfully"
-        }), 200
+        # Convert to checksum address
+        try:
+            holder_address = w3.to_checksum_address(holder_address)
+        except Exception:
+            return jsonify({"error": "Invalid holder address format"}), 400
+        
+        # Call the smart contract view function to get bond holder amount
+        # Note: The contract function takes both bondId AND holder address
+        try:
+            amount = contract.functions.getBondHolderAmount(bond_id, holder_address).call()
+            return jsonify({
+                "bondId": bond_id,
+                "holderAddress": holder_address,
+                "amount": amount
+            }), 200
+        except Exception as e:
+            return jsonify({"error": f"Failed to retrieve bond holder amount from smart contract: {str(e)}"}), 500
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/bond/count', methods=['GET'])
+def get_bond_count():
+    """Get the total number of bonds issued - calls the smart contract's bondCount function"""
+    try:
+        if w3 is None or contract is None:
+            return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
+        
+        try:
+            count = contract.functions.bondCount().call()
+            return jsonify({
+                "bondCount": count
+            }), 200
+        except Exception as e:
+            return jsonify({"error": f"Failed to retrieve bond count from smart contract: {str(e)}"}), 500
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route('/status', methods=['GET'])
 def get_api_status():
-    """Get API status information"""
+    """Get API status information including blockchain connection status"""
+    blockchain_connected = False
+    if w3 is not None:
+        try:
+            blockchain_connected = w3.is_connected()
+        except Exception:
+            blockchain_connected = False
+    
     return jsonify({
         "status": "API is running",
-        "blockchain_connected": w3.is_connected() if w3 else False,
+        "blockchain_connected": blockchain_connected,
+        "contract_deployed": contract is not None,
+        "contract_address": CONTRACT_ADDRESS if CONTRACT_ADDRESS else "Not configured",
         "endpoints": [
             "/health",
+            "/status",
             "/contract/address",
             "/bond/issue",
             "/bond/purchase", 
             "/bond/sell",
             "/bond/redeem",
+            "/bond/count",
             "/bond/<bond_id>/info",
             "/bond/<bond_id>/holders",
             "/bond/<bond_id>/holder/<holder_address>/amount"
@@ -370,7 +602,7 @@ def swagger_ui():
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Swagger UI</title>
+  <title>Bond Trading API - Swagger UI</title>
   <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
   <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
   <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>
@@ -388,6 +620,3 @@ const ui = SwaggerUIBundle({
 </body>
 </html>
 '''
-
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
