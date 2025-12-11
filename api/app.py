@@ -3,9 +3,21 @@ from web3 import Web3
 import json
 from .config import WEB3_PROVIDER, DEFAULT_WEB3_PROVIDER, CONTRACT_ADDRESS
 import os
+import logging
 
 # Initialize Flask app
 app = Flask(__name__)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('api.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Global variables for blockchain connection and contract
 w3 = None
@@ -30,20 +42,26 @@ def ensure_connection():
 # Connect to blockchain
 def connect_to_blockchain():
     try:
+        logger.info(f"Connecting to blockchain at {WEB3_PROVIDER}")
         # Try to connect to the blockchain with a timeout
         w3 = Web3(Web3.HTTPProvider(WEB3_PROVIDER, request_kwargs={'timeout': 30}))
         
         # Check if connection is successful
         if not w3.is_connected():
+            logger.warning(f"Failed to connect to {WEB3_PROVIDER}, trying default provider")
             # Try default provider with timeout
             w3 = Web3(Web3.HTTPProvider(DEFAULT_WEB3_PROVIDER, request_kwargs={'timeout': 30}))
             if not w3.is_connected():
                 raise Exception("Failed to connect to blockchain")
+            else:
+                logger.info("Successfully connected to default provider")
+        else:
+            logger.info("Successfully connected to blockchain")
         
         return w3
     except Exception as e:
         # Log the error and continue without a connection
-        print(f"Blockchain connection error: {e}")
+        logger.error(f"Blockchain connection error: {e}")
         return None
 
 # Load contract ABI from the build artifacts or define it inline
@@ -212,21 +230,26 @@ contract = None
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
+    logger.info("Health check requested")
     return jsonify({"status": "healthy"})
 
 @app.route('/contract/address', methods=['GET'])
 def get_contract_address():
     """Get the contract address"""
+    logger.info("Contract address requested")
     return jsonify({"contract_address": CONTRACT_ADDRESS if CONTRACT_ADDRESS else "Not configured"})
 
 @app.route('/bond/issue', methods=['POST'])
 def issue_bond():
     """Issue a new bond - calls the smart contract's issueBond function"""
     try:
+        logger.info("Issue bond endpoint called")
         if w3 is None or contract is None:
+            logger.error("Failed to connect to blockchain or contract for issue bond")
             return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
         
         data = request.get_json()
+        logger.debug(f"Issue bond data received: {data}")
         
         # Extract parameters
         name = data.get('name')
@@ -285,19 +308,24 @@ def issue_bond():
             }), 201
             
         except Exception as e:
+            logger.error(f"Smart contract transaction failed for issue bond: {e}")
             return jsonify({"error": f"Smart contract transaction failed: {str(e)}"}), 500
         
     except Exception as e:
+        logger.error(f"Unexpected error in issue_bond: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/bond/purchase', methods=['POST'])
 def purchase_bond():
     """Purchase a bond - calls the smart contract's purchaseBond function"""
     try:
+        logger.info("Purchase bond endpoint called")
         if w3 is None or contract is None:
+            logger.error("Failed to connect to blockchain or contract for purchase bond")
             return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
         
         data = request.get_json()
+        logger.debug(f"Purchase bond data received: {data}")
         
         # Extract parameters
         bond_id = data.get('bondId')
@@ -335,19 +363,24 @@ def purchase_bond():
             }), 200
             
         except Exception as e:
+            logger.error(f"Smart contract transaction failed for purchase bond: {e}")
             return jsonify({"error": f"Smart contract transaction failed: {str(e)}"}), 500
         
     except Exception as e:
+        logger.error(f"Unexpected error in purchase_bond: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/bond/sell', methods=['POST'])
 def sell_bond():
     """Sell a bond - calls the smart contract's sellBond function"""
     try:
+        logger.info("Sell bond endpoint called")
         if w3 is None or contract is None:
+            logger.error("Failed to connect to blockchain or contract for sell bond")
             return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
         
         data = request.get_json()
+        logger.debug(f"Sell bond data received: {data}")
         
         # Extract parameters
         bond_id = data.get('bondId')
@@ -393,19 +426,24 @@ def sell_bond():
             }), 200
             
         except Exception as e:
+            logger.error(f"Smart contract transaction failed for sell bond: {e}")
             return jsonify({"error": f"Smart contract transaction failed: {str(e)}"}), 500
         
     except Exception as e:
+        logger.error(f"Unexpected error in sell_bond: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/bond/redeem', methods=['POST'])
 def redeem_bond():
     """Redeem a bond - calls the smart contract's redeemBond function"""
     try:
+        logger.info("Redeem bond endpoint called")
         if w3 is None or contract is None:
+            logger.error("Failed to connect to blockchain or contract for redeem bond")
             return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
         
         data = request.get_json()
+        logger.debug(f"Redeem bond data received: {data}")
         
         # Extract parameters
         bond_id = data.get('bondId')
@@ -443,16 +481,20 @@ def redeem_bond():
             }), 200
             
         except Exception as e:
+            logger.error(f"Smart contract transaction failed for redeem bond: {e}")
             return jsonify({"error": f"Smart contract transaction failed: {str(e)}"}), 500
         
     except Exception as e:
+        logger.error(f"Unexpected error in redeem_bond: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/bond/<int:bond_id>/info', methods=['GET'])
 def get_bond_info(bond_id):
     """Get information about a specific bond - calls the smart contract's getBondInfo function"""
     try:
+        logger.info(f"Get bond info endpoint called for bond {bond_id}")
         if w3 is None or contract is None:
+            logger.error("Failed to connect to blockchain or contract for get bond info")
             return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
         
         # Call the smart contract view function to get bond info
@@ -462,6 +504,7 @@ def get_bond_info(bond_id):
             # The contract returns a tuple/struct with bond information
             # Handle both tuple format and named struct format
             if isinstance(bond_info, dict):
+                logger.debug(f"Retrieved bond info for bond {bond_id}")
                 return jsonify({
                     "bondId": bond_id,
                     "name": bond_info.get('name', ''),
@@ -474,6 +517,7 @@ def get_bond_info(bond_id):
                 }), 200
             else:
                 # Tuple format
+                logger.debug(f"Retrieved bond info for bond {bond_id} (tuple format)")
                 return jsonify({
                     "bondId": bond_id,
                     "name": bond_info[0],
@@ -486,36 +530,45 @@ def get_bond_info(bond_id):
                 }), 200
                 
         except Exception as e:
+            logger.error(f"Failed to retrieve bond info from smart contract for bond {bond_id}: {e}")
             return jsonify({"error": f"Failed to retrieve bond info from smart contract: {str(e)}"}), 500
         
     except Exception as e:
+        logger.error(f"Unexpected error in get_bond_info for bond {bond_id}: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/bond/<int:bond_id>/holders', methods=['GET'])
 def get_bond_holders(bond_id):
     """Get list of holders for a specific bond - calls the smart contract's getBondHolders function"""
     try:
+        logger.info(f"Get bond holders endpoint called for bond {bond_id}")
         if w3 is None or contract is None:
+            logger.error("Failed to connect to blockchain or contract for get bond holders")
             return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
         
         # Call the smart contract view function to get bond holders
         try:
             holders = contract.functions.getBondHolders(bond_id).call()
+            logger.debug(f"Retrieved {len(holders)} holders for bond {bond_id}")
             return jsonify({
                 "bondId": bond_id,
                 "holders": holders
             }), 200
         except Exception as e:
+            logger.error(f"Failed to retrieve bond holders from smart contract for bond {bond_id}: {e}")
             return jsonify({"error": f"Failed to retrieve bond holders from smart contract: {str(e)}"}), 500
         
     except Exception as e:
+        logger.error(f"Unexpected error in get_bond_holders for bond {bond_id}: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/bond/<int:bond_id>/holder/<holder_address>/amount', methods=['GET'])
 def get_bond_holder_amount(bond_id, holder_address):
     """Get the amount of bonds a specific holder has - calls the smart contract's getBondHolderAmount function"""
     try:
+        logger.info(f"Get bond holder amount endpoint called for bond {bond_id}, holder {holder_address}")
         if w3 is None or contract is None:
+            logger.error("Failed to connect to blockchain or contract for get bond holder amount")
             return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
         
         # Convert to checksum address
@@ -528,33 +581,41 @@ def get_bond_holder_amount(bond_id, holder_address):
         # Note: The contract function takes both bondId AND holder address
         try:
             amount = contract.functions.getBondHolderAmount(bond_id, holder_address).call()
+            logger.debug(f"Retrieved bond holder amount for bond {bond_id}, holder {holder_address}: {amount}")
             return jsonify({
                 "bondId": bond_id,
                 "holderAddress": holder_address,
                 "amount": amount
             }), 200
         except Exception as e:
+            logger.error(f"Failed to retrieve bond holder amount from smart contract for bond {bond_id}, holder {holder_address}: {e}")
             return jsonify({"error": f"Failed to retrieve bond holder amount from smart contract: {str(e)}"}), 500
         
     except Exception as e:
+        logger.error(f"Unexpected error in get_bond_holder_amount for bond {bond_id}, holder {holder_address}: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/bond/count', methods=['GET'])
 def get_bond_count():
     """Get the total number of bonds issued - calls the smart contract's bondCount function"""
     try:
+        logger.info("Get bond count endpoint called")
         if w3 is None or contract is None:
+            logger.error("Failed to connect to blockchain or contract for get bond count")
             return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
         
         try:
             count = contract.functions.bondCount().call()
+            logger.debug(f"Retrieved bond count: {count}")
             return jsonify({
                 "bondCount": count
             }), 200
         except Exception as e:
+            logger.error(f"Failed to retrieve bond count from smart contract: {e}")
             return jsonify({"error": f"Failed to retrieve bond count from smart contract: {str(e)}"}), 500
         
     except Exception as e:
+        logger.error(f"Unexpected error in get_bond_count: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/status', methods=['GET'])
