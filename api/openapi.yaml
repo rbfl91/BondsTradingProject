@@ -4,6 +4,8 @@ info:
   version: 1.0.0
   description: |
     API for interacting with the Bond Trading smart contract.
+security:
+  - BearerAuth: []
 servers:
   - url: http://localhost:5000
     description: Local development server
@@ -26,6 +28,8 @@ paths:
     get:
       summary: Get the contract address
       responses:
+        '401':
+          description: Missing or invalid token
         '200':
           description: Contract address returned
           content:
@@ -36,6 +40,25 @@ paths:
                   contract_address:
                     type: string
                     example: "0x0000000000000000000000000000000000000000"
+  /auth/check:
+    get:
+      summary: Validate bearer token
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Token valid
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authorized:
+                    type: boolean
+                  message:
+                    type: string
+        '401':
+          description: Missing or invalid token
   /bond/issue:
     post:
       summary: Issue a new bond
@@ -46,6 +69,8 @@ paths:
             schema:
               $ref: '#/components/schemas/IssueBondRequest'
       responses:
+        '401':
+          description: Missing or invalid token
         '201':
           description: Bond issued successfully
           content:
@@ -66,6 +91,8 @@ paths:
             schema:
               $ref: '#/components/schemas/PurchaseBondRequest'
       responses:
+        '401':
+          description: Missing or invalid token
         '200':
           description: Bond purchased successfully
           content:
@@ -86,6 +113,8 @@ paths:
             schema:
               $ref: '#/components/schemas/SellBondRequest'
       responses:
+        '401':
+          description: Missing or invalid token
         '200':
           description: Bond sold successfully
           content:
@@ -106,6 +135,8 @@ paths:
             schema:
               $ref: '#/components/schemas/RedeemBondRequest'
       responses:
+        '401':
+          description: Missing or invalid token
         '200':
           description: Bond redeemed successfully
           content:
@@ -126,6 +157,8 @@ paths:
           schema:
             type: integer
       responses:
+        '401':
+          description: Missing or invalid token
         '200':
           description: Bond information retrieved successfully
           content:
@@ -144,6 +177,8 @@ paths:
           schema:
             type: integer
       responses:
+        '401':
+          description: Missing or invalid token
         '200':
           description: Bond holders retrieved successfully
           content:
@@ -167,6 +202,8 @@ paths:
           schema:
             type: string
       responses:
+        '401':
+          description: Missing or invalid token
         '200':
           description: Bond holder amount retrieved successfully
           content:
@@ -179,13 +216,35 @@ paths:
     get:
       summary: Get API status information
       responses:
+        '401':
+          description: Missing or invalid token
         '200':
           description: API status returned
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiStatusResponse'
+  /bond/count:
+    get:
+      summary: Get the total number of bonds issued
+      responses:
+        '401':
+          description: Missing or invalid token
+        '200':
+          description: Bond count returned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bondCount:
+                    type: integer
 components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
   schemas:
     IssueBondRequest:
       type: object

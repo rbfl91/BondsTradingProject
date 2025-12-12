@@ -1,8 +1,11 @@
 from flask import Flask, request, jsonify, send_from_directory
 from web3 import Web3
 import json
-from .config import WEB3_PROVIDER, DEFAULT_WEB3_PROVIDER, CONTRACT_ADDRESS
 import os
+import sys
+# Add the api directory to Python path to resolve imports
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from config import WEB3_PROVIDER, DEFAULT_WEB3_PROVIDER, CONTRACT_ADDRESS, AUTH_TOKEN, OWNER_ADDRESS
 import logging
 
 # Initialize Flask app
@@ -23,9 +26,55 @@ logger = logging.getLogger(__name__)
 w3 = None
 contract = None
 
+
+def _set_default_account(w3_client: Web3) -> None:
+    """Set the default account for transactions using OWNER_ADDRESS if provided, else first account."""
+    try:
+        if OWNER_ADDRESS:
+            w3_client.eth.default_account = w3_client.to_checksum_address(OWNER_ADDRESS)
+            logger.info(f"Default account set from OWNER_ADDRESS: {w3_client.eth.default_account}")
+            return
+        accounts = w3_client.eth.accounts
+        if accounts:
+            w3_client.eth.default_account = accounts[0]
+            logger.info(f"Default account set to first provider account: {w3_client.eth.default_account}")
+        else:
+            logger.warning("No accounts available on provider; transactions will fail until an account is configured")
+    except Exception as e:
+        logger.warning(f"Could not set default account: {e}")
+
+
+def _chain_ready_response():
+    """Return a JSON error response if blockchain/contract are not ready."""
+    if not CONTRACT_ADDRESS:
+        return jsonify({
+            "error": "Contract address not configured. Set CONTRACT_ADDRESS in .env before calling this endpoint"
+        }), 500
+    if w3 is None:
+        return jsonify({"error": "Blockchain connection is not available"}), 500
+    if contract is None:
+        return jsonify({"error": "Smart contract is not initialised"}), 500
+    # Ensure a default account is present for transactions
+    if not getattr(w3.eth, "default_account", None):
+        try:
+            _set_default_account(w3)
+            if not getattr(w3.eth, "default_account", None):
+                return jsonify({"error": "No accounts available on provider; cannot sign transactions"}), 500
+        except Exception as e:
+            return jsonify({"error": f"Unable to set default account: {e}"}), 500
+    return None
+
 @app.before_request
 def ensure_connection():
     global w3, contract
+    # Authentication check (skip for health, docs, openapi.yaml)
+    exempt_paths = ['/health', '/docs', '/openapi.yaml']
+    if request.path not in exempt_paths:
+        auth_header = request.headers.get('Authorization')
+        expected = f"Bearer {AUTH_TOKEN}"
+        if auth_header != expected:
+            return jsonify({"error": "Unauthorized"}), 401
+
     # Only attempt to connect if a contract address is configured.
     # When running unit tests we may mock ``w3`` and ``contract``; in that case
     # ``w3`` might not have an ``is_connected`` attribute. Guard against that
@@ -57,7 +106,9 @@ def connect_to_blockchain():
                 logger.info("Successfully connected to default provider")
         else:
             logger.info("Successfully connected to blockchain")
-        
+        # Set a default account for signing transactions
+        _set_default_account(w3)
+
         return w3
     except Exception as e:
         # Log the error and continue without a connection
@@ -239,14 +290,21 @@ def get_contract_address():
     logger.info("Contract address requested")
     return jsonify({"contract_address": CONTRACT_ADDRESS if CONTRACT_ADDRESS else "Not configured"})
 
+
+@app.route('/auth/check', methods=['GET'])
+def auth_check():
+    """Validate bearer token (requires Authorization header)."""
+    logger.info("Auth check endpoint called")
+    return jsonify({"authorized": True, "message": "Token valid"})
+
 @app.route('/bond/issue', methods=['POST'])
 def issue_bond():
     """Issue a new bond - calls the smart contract's issueBond function"""
     try:
         logger.info("Issue bond endpoint called")
-        if w3 is None or contract is None:
-            logger.error("Failed to connect to blockchain or contract for issue bond")
-            return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
+        not_ready = _chain_ready_response()
+        if not_ready:
+            return not_ready
         
         data = request.get_json()
         logger.debug(f"Issue bond data received: {data}")
@@ -320,9 +378,9 @@ def purchase_bond():
     """Purchase a bond - calls the smart contract's purchaseBond function"""
     try:
         logger.info("Purchase bond endpoint called")
-        if w3 is None or contract is None:
-            logger.error("Failed to connect to blockchain or contract for purchase bond")
-            return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
+        not_ready = _chain_ready_response()
+        if not_ready:
+            return not_ready
         
         data = request.get_json()
         logger.debug(f"Purchase bond data received: {data}")
@@ -375,9 +433,9 @@ def sell_bond():
     """Sell a bond - calls the smart contract's sellBond function"""
     try:
         logger.info("Sell bond endpoint called")
-        if w3 is None or contract is None:
-            logger.error("Failed to connect to blockchain or contract for sell bond")
-            return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
+        not_ready = _chain_ready_response()
+        if not_ready:
+            return not_ready
         
         data = request.get_json()
         logger.debug(f"Sell bond data received: {data}")
@@ -438,9 +496,9 @@ def redeem_bond():
     """Redeem a bond - calls the smart contract's redeemBond function"""
     try:
         logger.info("Redeem bond endpoint called")
-        if w3 is None or contract is None:
-            logger.error("Failed to connect to blockchain or contract for redeem bond")
-            return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
+        not_ready = _chain_ready_response()
+        if not_ready:
+            return not_ready
         
         data = request.get_json()
         logger.debug(f"Redeem bond data received: {data}")
@@ -493,9 +551,9 @@ def get_bond_info(bond_id):
     """Get information about a specific bond - calls the smart contract's getBondInfo function"""
     try:
         logger.info(f"Get bond info endpoint called for bond {bond_id}")
-        if w3 is None or contract is None:
-            logger.error("Failed to connect to blockchain or contract for get bond info")
-            return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
+        not_ready = _chain_ready_response()
+        if not_ready:
+            return not_ready
         
         # Call the smart contract view function to get bond info
         try:
@@ -542,9 +600,9 @@ def get_bond_holders(bond_id):
     """Get list of holders for a specific bond - calls the smart contract's getBondHolders function"""
     try:
         logger.info(f"Get bond holders endpoint called for bond {bond_id}")
-        if w3 is None or contract is None:
-            logger.error("Failed to connect to blockchain or contract for get bond holders")
-            return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
+        not_ready = _chain_ready_response()
+        if not_ready:
+            return not_ready
         
         # Call the smart contract view function to get bond holders
         try:
@@ -567,9 +625,9 @@ def get_bond_holder_amount(bond_id, holder_address):
     """Get the amount of bonds a specific holder has - calls the smart contract's getBondHolderAmount function"""
     try:
         logger.info(f"Get bond holder amount endpoint called for bond {bond_id}, holder {holder_address}")
-        if w3 is None or contract is None:
-            logger.error("Failed to connect to blockchain or contract for get bond holder amount")
-            return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
+        not_ready = _chain_ready_response()
+        if not_ready:
+            return not_ready
         
         # Convert to checksum address
         try:
@@ -600,9 +658,9 @@ def get_bond_count():
     """Get the total number of bonds issued - calls the smart contract's bondCount function"""
     try:
         logger.info("Get bond count endpoint called")
-        if w3 is None or contract is None:
-            logger.error("Failed to connect to blockchain or contract for get bond count")
-            return jsonify({"error": "Failed to connect to blockchain or contract"}), 500
+        not_ready = _chain_ready_response()
+        if not_ready:
+            return not_ready
         
         try:
             count = contract.functions.bondCount().call()
@@ -675,9 +733,73 @@ const ui = SwaggerUIBundle({
   url: "/openapi.yaml",
   dom_id: '#swagger-ui',
   presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
-  layout: "BaseLayout"
+    layout: "BaseLayout",
+    persistAuthorization: true
 });
+
+function extractBearerToken() {
+    try {
+        const authState = ui.authSelectors.authorized().toJS();
+        const bearer = authState?.BearerAuth;
+        if (!bearer) return null;
+        // Swagger UI stores the header value in 'value'
+        if (typeof bearer === 'string') return bearer;
+        if (bearer.value) return bearer.value;
+        if (bearer.token) return bearer.token;
+        return null;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function validateToken() {
+    const statusEl = document.getElementById('auth-status');
+    statusEl.textContent = 'Validating...';
+    const token = extractBearerToken();
+    if (!token) {
+        statusEl.textContent = 'No token found. Click Authorize and provide Bearer <token>.';
+        statusEl.style.color = 'red';
+        return;
+    }
+    try {
+        const res = await fetch('/auth/check', {
+            method: 'GET',
+            headers: { 'Authorization': token }
+        });
+        if (res.ok) {
+            const data = await res.json();
+            statusEl.textContent = `Authorized: ${data.message || 'ok'}`;
+            statusEl.style.color = 'green';
+        } else {
+            statusEl.textContent = `Unauthorized (status ${res.status})`;
+            statusEl.style.color = 'red';
+        }
+    } catch (err) {
+        statusEl.textContent = `Error validating token: ${err}`;
+        statusEl.style.color = 'red';
+    }
+}
+
+const panel = document.createElement('div');
+panel.style.padding = '12px 16px';
+panel.style.background = '#f5f7fa';
+panel.style.border = '1px solid #dfe3e8';
+panel.style.margin = '12px 0';
+panel.innerHTML = `
+    <strong>Auth check</strong>
+    <button id="auth-validate-btn" style="margin-left:8px;">Validate token</button>
+    <div id="auth-status" style="margin-top:8px;color:#555;">Token not validated yet.</div>
+`;
+document.body.insertBefore(panel, document.getElementById('swagger-ui'));
+document.getElementById('auth-validate-btn').addEventListener('click', validateToken);
 </script>
 </body>
 </html>
 '''
+
+
+if __name__ == "__main__":
+    # Allow overriding port via environment variable (default 5000)
+    port = int(os.getenv("PORT", 5000))
+    # Run the Flask development server; host 0.0.0.0 to allow container/local access
+    app.run(host="0.0.0.0", port=port, debug=True)
