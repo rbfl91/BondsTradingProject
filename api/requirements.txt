@@ -1,3 +1,4 @@
 flask
 web3
 python-dotenv
+requests

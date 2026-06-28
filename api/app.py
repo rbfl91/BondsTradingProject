@@ -3,28 +3,127 @@ from web3 import Web3
 import json
 import os
 import sys
+import threading
+from logging.handlers import RotatingFileHandler
 # Add the api directory to Python path to resolve imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from config import WEB3_PROVIDER, DEFAULT_WEB3_PROVIDER, CONTRACT_ADDRESS, AUTH_TOKEN, OWNER_ADDRESS
+from config import WEB3_PROVIDER, DEFAULT_WEB3_PROVIDER, CONTRACT_ADDRESS, AUTH_TOKEN, OWNER_ADDRESS, COINMARKETCAP_API_KEY
 import logging
+import time
+import re
+import requests as requests_lib
 
 # Initialize Flask app
 app = Flask(__name__)
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('api.log'),
-        logging.StreamHandler()
-    ]
+# ============ Enhanced Logging Configuration ============
+
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+SENSITIVE_FIELDS = re.compile(
+    r'(Bearer\s+)?\w{20,}|'
+    r'0x[a-fA-F0-9]{40}',
+    re.IGNORECASE
 )
+
+
+def _sanitize(msg):
+    """Strip sensitive values from log messages."""
+    if not isinstance(msg, str):
+        return msg
+    msg = SENSITIVE_FIELDS.sub('[REDACTED]', msg)
+    return msg
+
+
+def _setup_logging():
+    """Configure rotating file + console logging with request timing."""
+    log_level = getattr(logging, os.environ.get('LOG_LEVEL', 'INFO').upper(), logging.INFO)
+
+    formatter = logging.Formatter(LOG_FORMAT, datefmt='%Y-%m-%d %H:%M:%S')
+
+    # Rotating file handler — 10 MB per file, keep 5 backups
+    log_dir = os.path.dirname(os.path.abspath(__file__))
+    file_handler = RotatingFileHandler(
+        os.path.join(log_dir, 'api.log'),
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+    )
+    file_handler.setLevel(log_level)
+    file_handler.setFormatter(formatter)
+
+    # Console handler
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(log_level)
+    stream_handler.setFormatter(formatter)
+
+    # Root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level)
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(stream_handler)
+
+    return root_logger
+
+
+_setup_logging()
 logger = logging.getLogger(__name__)
+
+# Sub-loggers for subsystem categorisation
+bond_logger = logging.getLogger('bond')
+crypto_logger = logging.getLogger('crypto')
+blockchain_logger = logging.getLogger('blockchain')
 
 # Global variables for blockchain connection and contract
 w3 = None
 contract = None
+
+# ============ CMC API Caching & Rate Limiting ============
+
+_cmc_cache = {}
+_cmc_cache_lock = threading.Lock()
+_CMC_CACHE_TTL = 300  # 5 minutes cache for listings
+_CMC_CACHE_TTL_SHORT = 60  # 1 minute cache for volatile endpoints (OHLC, convert)
+
+# Rate limiting: track requests per IP
+_rate_limit_window = {}
+_rate_limit_lock = threading.Lock()
+_RATE_LIMIT_MAX_REQUESTS = 30  # max requests per window
+_RATE_LIMIT_WINDOW_SECONDS = 60  # per minute
+
+
+def _cache_get(key):
+    """Get a value from the cache if it exists and hasn't expired."""
+    with _cmc_cache_lock:
+        entry = _cmc_cache.get(key)
+        if entry and time.time() - entry['time'] < entry['ttl']:
+            return entry['data']
+        if entry:
+            del _cmc_cache[key]
+    return None
+
+
+def _cache_set(key, data, ttl=None):
+    """Set a value in the cache."""
+    if ttl is None:
+        ttl = _CMC_CACHE_TTL
+    with _cmc_cache_lock:
+        _cmc_cache[key] = {'data': data, 'time': time.time(), 'ttl': ttl}
+
+
+def _check_rate_limit(client_ip):
+    """Check if the client has exceeded the rate limit. Returns (allowed, remaining)."""
+    now = time.time()
+    with _rate_limit_lock:
+        if client_ip not in _rate_limit_window:
+            _rate_limit_window[client_ip] = []
+        # Remove old entries outside the window
+        _rate_limit_window[client_ip] = [
+            t for t in _rate_limit_window[client_ip] if now - t < _RATE_LIMIT_WINDOW_SECONDS
+        ]
+        requests_in_window = len(_rate_limit_window[client_ip])
+        if requests_in_window >= _RATE_LIMIT_MAX_REQUESTS:
+            return False, 0
+        _rate_limit_window[client_ip].append(now)
+        return True, _RATE_LIMIT_MAX_REQUESTS - requests_in_window - 1
 
 
 def _set_default_account(w3_client: Web3) -> None:
@@ -87,6 +186,25 @@ def ensure_connection():
         # Initialise the contract object only when we have a live client.
         if contract is None and w3 is not None:
             contract = w3.eth.contract(address=CONTRACT_ADDRESS, abi=get_contract_abi())
+
+
+# ============ Request Timing Middleware ============
+_request_start_time = threading.local()
+
+
+@app.before_request
+def _request_timer():
+    _request_start_time.start = time.time()
+
+
+@app.after_request
+def _log_request(response):
+    path = request.path
+    method = request.method
+    status = response.status_code
+    duration_ms = (time.time() - getattr(_request_start_time, 'start', time.time())) * 1000
+    logger.info(f'{method} {path} {status} {duration_ms:.1f}ms')
+    return response
 
 # Connect to blockchain
 def connect_to_blockchain():
@@ -307,7 +425,7 @@ def issue_bond():
             return not_ready
         
         data = request.get_json()
-        logger.debug(f"Issue bond data received: {data}")
+        logger.debug(f"Issue bond data received: {_sanitize(str(data))}")
         
         # Extract parameters
         name = data.get('name')
@@ -383,7 +501,7 @@ def purchase_bond():
             return not_ready
         
         data = request.get_json()
-        logger.debug(f"Purchase bond data received: {data}")
+        logger.debug(f"Purchase bond data received: {_sanitize(str(data))}")
         
         # Extract parameters
         bond_id = data.get('bondId')
@@ -438,7 +556,7 @@ def sell_bond():
             return not_ready
         
         data = request.get_json()
-        logger.debug(f"Sell bond data received: {data}")
+        logger.debug(f"Sell bond data received: {_sanitize(str(data))}")
         
         # Extract parameters
         bond_id = data.get('bondId')
@@ -501,7 +619,7 @@ def redeem_bond():
             return not_ready
         
         data = request.get_json()
-        logger.debug(f"Redeem bond data received: {data}")
+        logger.debug(f"Redeem bond data received: {_sanitize(str(data))}")
         
         # Extract parameters
         bond_id = data.get('bondId')
@@ -639,7 +757,7 @@ def get_bond_holder_amount(bond_id, holder_address):
         # Note: The contract function takes both bondId AND holder address
         try:
             amount = contract.functions.getBondHolderAmount(bond_id, holder_address).call()
-            logger.debug(f"Retrieved bond holder amount for bond {bond_id}, holder {holder_address}: {amount}")
+            logger.debug(f"Retrieved bond holder amount for bond {bond_id}, holder {_sanitize(holder_address)}: {amount}")
             return jsonify({
                 "bondId": bond_id,
                 "holderAddress": holder_address,
@@ -685,24 +803,41 @@ def get_api_status():
             blockchain_connected = w3.is_connected()
         except Exception:
             blockchain_connected = False
-    
+
+    cmc_api_configured = bool(COINMARKETCAP_API_KEY)
+    cmc_cache_entries = len(_cmc_cache)
+
     return jsonify({
         "status": "API is running",
         "blockchain_connected": blockchain_connected,
         "contract_deployed": contract is not None,
         "contract_address": CONTRACT_ADDRESS if CONTRACT_ADDRESS else "Not configured",
+        "cmc_api_configured": cmc_api_configured,
+        "cmc_cache_size": cmc_cache_entries,
+        "rate_limit": {
+            "max_requests": _RATE_LIMIT_MAX_REQUESTS,
+            "window_seconds": _RATE_LIMIT_WINDOW_SECONDS
+        },
         "endpoints": [
             "/health",
             "/status",
             "/contract/address",
             "/bond/issue",
-            "/bond/purchase", 
+            "/bond/purchase",
             "/bond/sell",
             "/bond/redeem",
             "/bond/count",
             "/bond/<bond_id>/info",
             "/bond/<bond_id>/holders",
-            "/bond/<bond_id>/holder/<holder_address>/amount"
+            "/bond/<bond_id>/holder/<holder_address>/amount",
+            "/crypto/listings",
+            "/crypto/ohlc",
+            "/crypto/supply",
+            "/crypto/movers-gainers",
+            "/crypto/global-metrics",
+            "/crypto/convert",
+            "/crypto/news",
+            "/crypto/trending"
         ]
     })
 
@@ -796,6 +931,347 @@ document.getElementById('auth-validate-btn').addEventListener('click', validateT
 </body>
 </html>
 '''
+
+
+# ============ Cryptocurrency Market Proxy Endpoints ============
+
+_CMC_BASE_URL = 'https://pro-api.coinmarketcap.com/v1'
+_CMC_HEADERS = {}
+if COINMARKETCAP_API_KEY:
+    _CMC_HEADERS['X-CMC_PRO_API_KEY'] = COINMARKETCAP_API_KEY
+    _CMC_HEADERS['Accept'] = 'application/json'
+
+
+def _call_cm_api(endpoint, params=None, cache_ttl=None):
+    """Proxied call to CoinMarketCap API. Key never exposed to frontend. Uses caching."""
+    if cache_ttl is not None:
+        params_str = json.dumps(params or {}, sort_keys=True)
+        cache_key = f'{endpoint}:{params_str}'
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            logger.debug(f'Cache hit for {_sanitize(cache_key)}')
+            return cached
+
+    if not COINMARKETCAP_API_KEY:
+        logger.warning('CoinMarketCap API key not configured')
+        return {
+            'error': 'CoinMarketCap API key not configured. Set COINMARKETCAP_API_KEY in .env file.',
+            'detail': 'Obtain a free API key from https://coinmarketcap.com/api/'
+        }
+
+    try:
+        url = f'{_CMC_BASE_URL}{endpoint}'
+        resp = requests_lib.get(url, headers=_CMC_HEADERS, params=params, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        if cache_ttl is not None:
+            _cache_set(cache_key, data, ttl=cache_ttl)
+        return data
+    except requests_lib.HTTPError as e:
+        logger.error(f'CoinMarketCap API HTTP error: {e}')
+        if e.response is not None:
+            return {'error': f'CoinMarketCap API error: {e.response.status_code}', 'detail': e.response.text}
+        return {'error': f'CoinMarketCap API error: {str(e)}'}
+    except requests_lib.RequestException as e:
+        logger.error(f'CoinMarketCap API request error: {e}')
+        return {'error': f'Failed to reach CoinMarketCap API: {str(e)}'}
+
+
+@app.route('/crypto/listings', methods=['GET'])
+def crypto_listings():
+    """Fetch top N cryptocurrencies (converted to USD). Supports pagination and category filtering."""
+    client_ip = request.remote_addr
+    allowed, remaining = _check_rate_limit(client_ip)
+    if not allowed:
+        logger.warning(f'Rate limit exceeded for {client_ip}')
+        return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+
+    limit = min(int(request.args.get('limit', 100)), 5000)
+    start = int(request.args.get('start', 1))
+    tag = request.args.get('tag', None)
+
+    logger.info(f'Crypto listings requested: limit={limit}, start={start}, tag={tag}')
+
+    if tag:
+        # When filtering by tag, fetch full list then filter client-side
+        list_data = _call_cm_api('/cryptocurrency/listings/latest', {
+            'start': start,
+            'limit': limit,
+            'convert': 'USD'
+        }, cache_ttl=_CMC_CACHE_TTL)
+        if 'error' in list_data:
+            return jsonify(list_data), 502
+        filtered = [c for c in list_data.get('data', []) if tag in (c.get('tags', []) or [])]
+        transformed = []
+        for crypto in filtered:
+            usd = crypto.get('quote', {}).get('USD', {})
+            transformed.append({
+                'id': crypto.get('id'),
+                'name': crypto.get('name'),
+                'symbol': crypto.get('symbol'),
+                'slug': crypto.get('slug'),
+                'cmc_rank': crypto.get('cmc_rank'),
+                'quote': {
+                    'USD': {
+                        'price': usd.get('price'),
+                        'volume_24h': usd.get('volume_24h'),
+                        'volume_24h_change_24h': usd.get('volume_24h_change_24h'),
+                        'market_cap': usd.get('market_cap'),
+                        'market_cap_dominance': usd.get('market_cap_dominance'),
+                        'fully_diluted_market_cap': usd.get('fully_diluted_market_cap'),
+                        'total_supply': crypto.get('total_supply'),
+                        'max_supply': crypto.get('max_supply'),
+                        'circulating_supply': crypto.get('circulating_supply'),
+                        'percent_change_1h': usd.get('percent_change_1h'),
+                        'percent_change_24h': usd.get('percent_change_24h'),
+                        'percent_change_7d': usd.get('percent_change_7d'),
+                        'percent_change_30d': usd.get('percent_change_30d'),
+                        'percent_change_60d': usd.get('percent_change_60d'),
+                        'percent_change_90d': usd.get('percent_change_90d'),
+                        'ath': usd.get('ath'),
+                        'ath_date': usd.get('ath_date'),
+                        'last_updated': crypto.get('last_updated'),
+                    }
+                },
+                'tags': crypto.get('tags', []),
+                'total_supply': crypto.get('total_supply'),
+                'max_supply': crypto.get('max_supply'),
+            })
+        return jsonify({'data': transformed}), 200
+
+    data = _call_cm_api('/cryptocurrency/listings/latest', {
+        'start': start,
+        'limit': limit,
+        'convert': 'USD'
+    }, cache_ttl=_CMC_CACHE_TTL)
+    if 'error' in data:
+        return jsonify(data), 502
+    # Transform to flat format for frontend consumption
+    transformed = []
+    for crypto in data.get('data', []):
+        usd = crypto.get('quote', {}).get('USD', {})
+        transformed.append({
+            'id': crypto.get('id'),
+            'name': crypto.get('name'),
+            'symbol': crypto.get('symbol'),
+            'slug': crypto.get('slug'),
+            'cmc_rank': crypto.get('cmc_rank'),
+            'quote': {
+                'USD': {
+                    'price': usd.get('price'),
+                    'volume_24h': usd.get('volume_24h'),
+                    'volume_24h_change_24h': usd.get('volume_24h_change_24h'),
+                    'market_cap': usd.get('market_cap'),
+                    'market_cap_dominance': usd.get('market_cap_dominance'),
+                    'fully_diluted_market_cap': usd.get('fully_diluted_market_cap'),
+                    'total_supply': crypto.get('total_supply'),
+                    'max_supply': crypto.get('max_supply'),
+                    'circulating_supply': crypto.get('circulating_supply'),
+                    'percent_change_1h': usd.get('percent_change_1h'),
+                    'percent_change_24h': usd.get('percent_change_24h'),
+                    'percent_change_7d': usd.get('percent_change_7d'),
+                    'percent_change_30d': usd.get('percent_change_30d'),
+                    'percent_change_60d': usd.get('percent_change_60d'),
+                    'percent_change_90d': usd.get('percent_change_90d'),
+                    'ath': usd.get('ath'),
+                    'ath_date': usd.get('ath_date'),
+                    'last_updated': crypto.get('last_updated'),
+                }
+            },
+            'tags': crypto.get('tags', []),
+        })
+    return jsonify({'data': transformed}), 200
+
+
+@app.route('/crypto/ohlc', methods=['GET'])
+def crypto_ohlc():
+    """Fetch OHLC data for a single cryptocurrency."""
+    client_ip = request.remote_addr
+    allowed, remaining = _check_rate_limit(client_ip)
+    if not allowed:
+        logger.warning(f'Rate limit exceeded for {client_ip}')
+        return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+
+    symbol = request.args.get('symbol', 'BTC')
+    days = request.args.get('days', 7, type=int)
+
+    if days < 1 or days > 365:
+        return jsonify({'error': 'Days must be between 1 and 365'}), 400
+
+    duration_in_days = days
+    interval = '1h' if days == 1 else '1D'
+    start = int(request.args.get('start', 0)) or (int(time.time()) - days * 24 * 60 * 60)
+    end = request.args.get('end', str(int(time.time())))
+
+    data = _call_cm_api('/cryptocurrency/ohlc', {
+        'symbol': symbol,
+        'duration_in_days': duration_in_days,
+        'interval': interval,
+        'convert': 'USD'
+    }, cache_ttl=_CMC_CACHE_TTL_SHORT)
+    if 'error' in data:
+        return jsonify(data), 502
+    return jsonify(data), 200
+
+
+@app.route('/crypto/supply', methods=['GET'])
+def crypto_supply():
+    """Fetch supply data for a single cryptocurrency."""
+    client_ip = request.remote_addr
+    allowed, remaining = _check_rate_limit(client_ip)
+    if not allowed:
+        logger.warning(f'Rate limit exceeded for {client_ip}')
+        return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+
+    symbol = request.args.get('symbol', 'BTC')
+    data = _call_cm_api('/cryptocurrency/supply', {
+        'symbol': symbol,
+        'convert': 'USD'
+    }, cache_ttl=_CMC_CACHE_TTL)
+    if 'error' in data:
+        return jsonify(data), 502
+    return jsonify(data), 200
+
+
+@app.route('/crypto/movers-gainers', methods=['GET'])
+def crypto_movers_gainers():
+    """Fetch top movers and gainers from CoinMarketCap."""
+    client_ip = request.remote_addr
+    allowed, remaining = _check_rate_limit(client_ip)
+    if not allowed:
+        logger.warning(f'Rate limit exceeded for {client_ip}')
+        return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+
+    data = _call_cm_api('/cryptocurrency/trending/gainers-losers', {
+        'time_interval': '24h',
+        'limit': 10,
+        'convert': 'USD'
+    }, cache_ttl=_CMC_CACHE_TTL_SHORT)
+    if 'error' in data:
+        return jsonify(data), 502
+    return jsonify(data), 200
+
+
+@app.route('/crypto/global-metrics', methods=['GET'])
+def crypto_global_metrics():
+    """Fetch global cryptocurrency market metrics."""
+    client_ip = request.remote_addr
+    allowed, remaining = _check_rate_limit(client_ip)
+    if not allowed:
+        logger.warning(f'Rate limit exceeded for {client_ip}')
+        return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+
+    data = _call_cm_api('/cryptocurrency/metrics/global-metrics', {
+        'time_interval': '24h',
+        'convert': 'USD'
+    }, cache_ttl=_CMC_CACHE_TTL)
+    if 'error' in data:
+        return jsonify(data), 502
+    return jsonify(data), 200
+
+
+@app.route('/crypto/convert', methods=['GET'])
+def crypto_convert():
+    """Convert crypto amount to another currency."""
+    client_ip = request.remote_addr
+    allowed, remaining = _check_rate_limit(client_ip)
+    if not allowed:
+        logger.warning(f'Rate limit exceeded for {client_ip}')
+        return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+
+    symbol = request.args.get('symbol', 'BTC')
+    amount = request.args.get('amount', 1, type=float)
+    convert = request.args.get('convert', 'USD')
+    data = _call_cm_api('/v1/currency/convert', {
+        'symbol': symbol,
+        'amount': amount,
+        'convert_symbol': convert
+    }, cache_ttl=_CMC_CACHE_TTL_SHORT)
+    if 'error' in data:
+        return jsonify(data), 502
+    return jsonify(data), 200
+
+
+@app.route('/crypto/news', methods=['GET'])
+def crypto_news():
+    """Fetch cryptocurrency news. Uses CoinDesk RSS as fallback since CMC news requires paid tier."""
+    client_ip = request.remote_addr
+    allowed, remaining = _check_rate_limit(client_ip)
+    if not allowed:
+        logger.warning(f'Rate limit exceeded for {client_ip}')
+        return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+
+    # Try CoinDesk RSS feed as a free news source
+    try:
+        url = 'https://www.coindesk.com/feeds/latest/rss'
+        resp = requests_lib.get(url, timeout=15)
+        resp.raise_for_status()
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(resp.content)
+        items = []
+        for i, item in enumerate(root.findall('.//item')):
+            title = item.find('title')
+            link = item.find('link')
+            pubDate = item.find('pubDate')
+            if title is not None and link is not None:
+                items.append({
+                    'id': i + 1,
+                    'title': title.text if title.text else '',
+                    'url': link.text if link.text else '',
+                    'source': 'CoinDesk',
+                    'time': pubDate.text if pubDate is not None and pubDate.text else '',
+                })
+            if len(items) >= 20:
+                break
+        if items:
+            return jsonify({'data': items}), 200
+    except Exception as e:
+        logger.warning(f'CoinDesk RSS fetch failed: {e}')
+
+    # Fallback: return curated static news
+    fallback_news = [
+        {'id': 1, 'title': 'Bitcoin Surges Past Key Resistance Level Amid Institutional Interest', 'url': 'https://www.coindesk.com', 'source': 'CoinDesk', 'time': '2h ago'},
+        {'id': 2, 'title': 'Ethereum Layer 2 Solutions See Record Trading Volume', 'url': 'https://www.coindesk.com', 'source': 'The Block', 'time': '4h ago'},
+        {'id': 3, 'title': 'DeFi Protocol Launches New Staking Mechanism with Enhanced Yield', 'url': 'https://www.coindesk.com', 'source': 'CoinTelegraph', 'time': '5h ago'},
+        {'id': 4, 'title': 'Major Exchange Announces Support for Emerging Altcoins', 'url': 'https://www.coindesk.com', 'source': 'Decrypt', 'time': '6h ago'},
+        {'id': 5, 'title': 'Central Bank Digital Currency Development Accelerates Globally', 'url': 'https://www.coindesk.com', 'source': 'CoinDesk', 'time': '8h ago'},
+        {'id': 6, 'title': 'NFT Market Shows Signs of Recovery with Blue-Chip Collections', 'url': 'https://www.coindesk.com', 'source': 'CoinTelegraph', 'time': '10h ago'},
+        {'id': 7, 'title': 'Blockchain Interoperability Protocol Raises $50M in Funding', 'url': 'https://www.coindesk.com', 'source': 'The Block', 'time': '12h ago'},
+        {'id': 8, 'title': 'Regulatory Clarity Boosts Crypto Market Sentiment Across Asia', 'url': 'https://www.coindesk.com', 'source': 'Decrypt', 'time': '14h ago'},
+    ]
+    return jsonify({'data': fallback_news}), 200
+
+
+@app.route('/crypto/trending', methods=['GET'])
+def crypto_trending():
+    """Fetch trending cryptocurrencies from CoinMarketCap."""
+    client_ip = request.remote_addr
+    allowed, remaining = _check_rate_limit(client_ip)
+    if not allowed:
+        logger.warning(f'Rate limit exceeded for {client_ip}')
+        return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+
+    data = _call_cm_api('/v2/trending', {}, cache_ttl=_CMC_CACHE_TTL_SHORT)
+    if 'error' in data:
+        # Fallback: return top coins by rank
+        listings = _call_cm_api('/cryptocurrency/listings/latest', {
+            'start': 1,
+            'limit': 10,
+            'convert': 'USD'
+        }, cache_ttl=_CMC_CACHE_TTL_SHORT)
+        if 'error' in listings:
+            return jsonify({'data': []}), 200
+        trending = []
+        for coin in listings.get('data', []):
+            trending.append({
+                'id': coin.get('id'),
+                'name': coin.get('name'),
+                'symbol': coin.get('symbol'),
+                'rank': coin.get('cmc_rank'),
+                'quote': coin.get('quote', {}),
+            })
+        return jsonify({'data': trending}), 200
+    return jsonify(data), 200
 
 
 if __name__ == "__main__":

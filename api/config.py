@@ -16,5 +16,8 @@ AUTH_TOKEN = os.getenv('AUTH_TOKEN', 'default-token')
 # Owner account for contract interactions (will be used as default tx sender if set)
 OWNER_ADDRESS = os.getenv('OWNER_ADDRESS', '')
 
+# CoinMarketCap API configuration
+COINMARKETCAP_API_KEY = os.getenv('COINMARKETCAP_API_KEY', '')
+
 # Default values for local development
 DEFAULT_WEB3_PROVIDER = 'http://127.0.0.1:8545'
