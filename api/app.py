@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
 from web3 import Web3
 import json
 import os
@@ -15,6 +16,16 @@ import requests as requests_lib
 
 # Initialize Flask app
 app = Flask(__name__)
+
+# C-05 FIX: CORS middleware — restrict to known origins
+_FRONTEND_ORIGINS = [
+    'http://localhost:3000',
+    'http://localhost:5173',  # Vite dev server
+]
+prod_origin = os.environ.get('CORS_ORIGINS')
+if prod_origin:
+    _FRONTEND_ORIGINS.extend(prod_origin.split(','))
+CORS(app, origins=_FRONTEND_ORIGINS, supports_credentials=True)
 
 # ============ Enhanced Logging Configuration ============
 
@@ -167,7 +178,7 @@ def _chain_ready_response():
 def ensure_connection():
     global w3, contract
     # Authentication check (skip for health, docs, openapi.yaml)
-    exempt_paths = ['/health', '/docs', '/openapi.yaml']
+    exempt_paths = ['/health', '/docs', '/openapi.yaml', '/status', '/contract/address']
     if request.path not in exempt_paths:
         auth_header = request.headers.get('Authorization')
         expected = f"Bearer {AUTH_TOKEN}"
@@ -245,7 +256,8 @@ def get_contract_abi():
     except Exception as e:
         print(f"Failed to load ABI from file: {e}")
     
-    # Fallback to inline ABI definition matching the actual BondTrading.sol contract
+    # H-05 NOTE: Inline ABI fallback — prefer build artifacts. Updated to match
+    # current BondTrading.sol (includes BondRedeemed event, pause/unpause, MAX_GAS_LIMIT).
     abi = [
         {
             "inputs": [
@@ -258,7 +270,7 @@ def get_contract_abi():
         {
             "anonymous": False,
             "inputs": [
-                {"indexed": False, "internalType": "uint256", "name": "bondId", "type": "uint256"},
+                {"indexed": True, "internalType": "uint256", "name": "bondId", "type": "uint256"},
                 {"indexed": False, "internalType": "string", "name": "name", "type": "string"},
                 {"indexed": False, "internalType": "string", "name": "issuer", "type": "string"},
                 {"indexed": False, "internalType": "uint256", "name": "faceValue", "type": "uint256"}
@@ -269,8 +281,8 @@ def get_contract_abi():
         {
             "anonymous": False,
             "inputs": [
-                {"indexed": False, "internalType": "uint256", "name": "bondId", "type": "uint256"},
-                {"indexed": False, "internalType": "address", "name": "buyer", "type": "address"},
+                {"indexed": True, "internalType": "uint256", "name": "bondId", "type": "uint256"},
+                {"indexed": True, "internalType": "address", "name": "buyer", "type": "address"},
                 {"indexed": False, "internalType": "uint256", "name": "amount", "type": "uint256"}
             ],
             "name": "BondPurchased",
@@ -279,13 +291,113 @@ def get_contract_abi():
         {
             "anonymous": False,
             "inputs": [
-                {"indexed": False, "internalType": "uint256", "name": "bondId", "type": "uint256"},
-                {"indexed": False, "internalType": "address", "name": "seller", "type": "address"},
-                {"indexed": False, "internalType": "address", "name": "buyer", "type": "address"},
+                {"indexed": True, "internalType": "uint256", "name": "bondId", "type": "uint256"},
+                {"indexed": True, "internalType": "address", "name": "seller", "type": "address"},
+                {"indexed": True, "internalType": "address", "name": "buyer", "type": "address"},
                 {"indexed": False, "internalType": "uint256", "name": "amount", "type": "uint256"}
             ],
             "name": "BondSold",
             "type": "event"
+        },
+        {
+            "anonymous": False,
+            "inputs": [
+                {"indexed": True, "internalType": "uint256", "name": "bondId", "type": "uint256"},
+                {"indexed": True, "internalType": "address", "name": "redeemer", "type": "address"},
+                {"indexed": False, "internalType": "uint256", "name": "amount", "type": "uint256"}
+            ],
+            "name": "BondRedeemed",
+            "type": "event"
+        },
+        {
+            "anonymous": False,
+            "inputs": [{"indexed": False, "internalType": "address", "name": "account", "type": "address"}],
+            "name": "Paused",
+            "type": "event"
+        },
+        {
+            "anonymous": False,
+            "inputs": [{"indexed": False, "internalType": "address", "name": "account", "type": "address"}],
+            "name": "Unpaused",
+            "type": "event"
+        },
+        {
+            "inputs": [],
+            "name": "MAX_GAS_LIMIT",
+            "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+            "stateMutability": "view",
+            "type": "function"
+        },
+        {
+            "inputs": [],
+            "name": "bondCount",
+            "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+            "stateMutability": "view",
+            "type": "function"
+        },
+        {
+            "inputs": [],
+            "name": "bondToken",
+            "outputs": [{"internalType": "contract IBondToken", "name": "", "type": "address"}],
+            "stateMutability": "view",
+            "type": "function"
+        },
+        {
+            "inputs": [{"internalType": "uint256", "name": "", "type": "uint256"}, {"internalType": "uint256", "name": "", "type": "uint256"}],
+            "name": "bonds",
+            "outputs": [
+                {"internalType": "string", "name": "name", "type": "string"},
+                {"internalType": "string", "name": "issuer", "type": "string"},
+                {"internalType": "uint256", "name": "faceValue", "type": "uint256"},
+                {"internalType": "uint256", "name": "maturityDate", "type": "uint256"},
+                {"internalType": "uint256", "name": "interestRate", "type": "uint256"},
+                {"internalType": "uint256", "name": "totalSupply", "type": "uint256"},
+                {"internalType": "bool", "name": "isActive", "type": "bool"}
+            ],
+            "stateMutability": "view",
+            "type": "function"
+        },
+        {
+            "inputs": [],
+            "name": "owner",
+            "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+            "stateMutability": "view",
+            "type": "function"
+        },
+        {
+            "inputs": [],
+            "name": "pause",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
+        },
+        {
+            "inputs": [],
+            "name": "paused",
+            "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+            "stateMutability": "view",
+            "type": "function"
+        },
+        {
+            "inputs": [],
+            "name": "renounceOwnership",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
+        },
+        {
+            "inputs": [{"internalType": "address", "name": "newOwner", "type": "address"}],
+            "name": "transferOwnership",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
+        },
+        {
+            "inputs": [],
+            "name": "unpause",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
         },
         {
             "inputs": [
@@ -314,17 +426,6 @@ def get_contract_abi():
         {
             "inputs": [
                 {"internalType": "uint256", "name": "_bondId", "type": "uint256"},
-                {"internalType": "uint256", "name": "_amount", "type": "uint256"},
-                {"internalType": "address", "name": "_buyer", "type": "address"}
-            ],
-            "name": "sellBond",
-            "outputs": [],
-            "stateMutability": "nonpayable",
-            "type": "function"
-        },
-        {
-            "inputs": [
-                {"internalType": "uint256", "name": "_bondId", "type": "uint256"},
                 {"internalType": "uint256", "name": "_amount", "type": "uint256"}
             ],
             "name": "redeemBond",
@@ -334,8 +435,17 @@ def get_contract_abi():
         },
         {
             "inputs": [
-                {"internalType": "uint256", "name": "_bondId", "type": "uint256"}
+                {"internalType": "uint256", "name": "_bondId", "type": "uint256"},
+                {"internalType": "uint256", "name": "_amount", "type": "uint256"},
+                {"internalType": "address", "name": "_buyer", "type": "address"}
             ],
+            "name": "sellBond",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
+        },
+        {
+            "inputs": [{"internalType": "uint256", "name": "_bondId", "type": "uint256"}],
             "name": "getBondInfo",
             "outputs": [
                 {
@@ -357,13 +467,9 @@ def get_contract_abi():
             "type": "function"
         },
         {
-            "inputs": [
-                {"internalType": "uint256", "name": "_bondId", "type": "uint256"}
-            ],
+            "inputs": [{"internalType": "uint256", "name": "_bondId", "type": "uint256"}],
             "name": "getBondHolders",
-            "outputs": [
-                {"internalType": "address[]", "name": "", "type": "address[]"}
-            ],
+            "outputs": [{"internalType": "address[]", "name": "", "type": "address[]"}],
             "stateMutability": "view",
             "type": "function"
         },
@@ -373,18 +479,7 @@ def get_contract_abi():
                 {"internalType": "address", "name": "_holder", "type": "address"}
             ],
             "name": "getBondHolderAmount",
-            "outputs": [
-                {"internalType": "uint256", "name": "", "type": "uint256"}
-            ],
-            "stateMutability": "view",
-            "type": "function"
-        },
-        {
-            "inputs": [],
-            "name": "bondCount",
-            "outputs": [
-                {"internalType": "uint256", "name": "", "type": "uint256"}
-            ],
+            "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
             "stateMutability": "view",
             "type": "function"
         }
@@ -446,13 +541,21 @@ def issue_bond():
         interest_rate = int(interest_rate)
         supply = int(supply)
         
+        # H-07 FIX: Rate limit bond operations
+        client_ip = request.remote_addr
+        allowed, remaining = _check_rate_limit(client_ip)
+        if not allowed:
+            return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+
         # Prepare and execute the smart contract transaction
         tx = contract.functions.issueBond(name, issuer, face_value, maturity_date, interest_rate, supply)
         try:
-            # Estimate gas for the transaction
+            # Estimate gas for the transaction with DoS protection cap
             gas_estimate = tx.estimate_gas({'from': w3.eth.default_account})
+            # C-04 / DoS FIX: cap gas at 2x estimate, max 500k
+            gas_cap = min(gas_estimate * 2, 500000)
             # Send transaction to the blockchain
-            tx_hash = tx.transact({'from': w3.eth.default_account, 'gas': gas_estimate})
+            tx_hash = tx.transact({'from': w3.eth.default_account, 'gas': gas_cap})
             # Wait for transaction to be mined
             tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
             
@@ -485,11 +588,11 @@ def issue_bond():
             
         except Exception as e:
             logger.error(f"Smart contract transaction failed for issue bond: {e}")
-            return jsonify({"error": f"Smart contract transaction failed: {str(e)}"}), 500
-        
+            return jsonify({"error": "Transaction failed on blockchain. Please try again."}), 500
+
     except Exception as e:
         logger.error(f"Unexpected error in issue_bond: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/bond/purchase', methods=['POST'])
 def purchase_bond():
@@ -515,13 +618,19 @@ def purchase_bond():
         bond_id = int(bond_id)
         amount = int(amount)
         
+        # H-07 FIX: Rate limit bond operations
+        client_ip = request.remote_addr
+        allowed, remaining = _check_rate_limit(client_ip)
+        if not allowed:
+            return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+
         # Prepare and execute the smart contract transaction
         tx = contract.functions.purchaseBond(bond_id, amount)
         try:
-            # Estimate gas for the transaction
+            # Estimate gas with DoS protection cap
             gas_estimate = tx.estimate_gas({'from': w3.eth.default_account})
-            # Send transaction to the blockchain
-            tx_hash = tx.transact({'from': w3.eth.default_account, 'gas': gas_estimate})
+            gas_cap = min(gas_estimate * 2, 500000)
+            tx_hash = tx.transact({'from': w3.eth.default_account, 'gas': gas_cap})
             # Wait for transaction to be mined
             tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
             
@@ -540,11 +649,11 @@ def purchase_bond():
             
         except Exception as e:
             logger.error(f"Smart contract transaction failed for purchase bond: {e}")
-            return jsonify({"error": f"Smart contract transaction failed: {str(e)}"}), 500
-        
+            return jsonify({"error": "Transaction failed on blockchain. Please try again."}), 500
+
     except Exception as e:
         logger.error(f"Unexpected error in purchase_bond: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/bond/sell', methods=['POST'])
 def sell_bond():
@@ -577,13 +686,19 @@ def sell_bond():
         except Exception:
             return jsonify({"error": "Invalid buyer address format"}), 400
         
+        # H-07 FIX: Rate limit bond operations
+        client_ip = request.remote_addr
+        allowed, remaining = _check_rate_limit(client_ip)
+        if not allowed:
+            return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+
         # Prepare and execute the smart contract transaction
         tx = contract.functions.sellBond(bond_id, amount, buyer_address)
         try:
-            # Estimate gas for the transaction
+            # Estimate gas with DoS protection cap
             gas_estimate = tx.estimate_gas({'from': w3.eth.default_account})
-            # Send transaction to the blockchain
-            tx_hash = tx.transact({'from': w3.eth.default_account, 'gas': gas_estimate})
+            gas_cap = min(gas_estimate * 2, 500000)
+            tx_hash = tx.transact({'from': w3.eth.default_account, 'gas': gas_cap})
             # Wait for transaction to be mined
             tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
             
@@ -603,11 +718,11 @@ def sell_bond():
             
         except Exception as e:
             logger.error(f"Smart contract transaction failed for sell bond: {e}")
-            return jsonify({"error": f"Smart contract transaction failed: {str(e)}"}), 500
-        
+            return jsonify({"error": "Transaction failed on blockchain. Please try again."}), 500
+
     except Exception as e:
         logger.error(f"Unexpected error in sell_bond: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/bond/redeem', methods=['POST'])
 def redeem_bond():
@@ -633,13 +748,19 @@ def redeem_bond():
         bond_id = int(bond_id)
         amount = int(amount)
         
+        # H-07 FIX: Rate limit bond operations
+        client_ip = request.remote_addr
+        allowed, remaining = _check_rate_limit(client_ip)
+        if not allowed:
+            return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+
         # Prepare and execute the smart contract transaction
         tx = contract.functions.redeemBond(bond_id, amount)
         try:
-            # Estimate gas for the transaction
+            # Estimate gas with DoS protection cap
             gas_estimate = tx.estimate_gas({'from': w3.eth.default_account})
-            # Send transaction to the blockchain
-            tx_hash = tx.transact({'from': w3.eth.default_account, 'gas': gas_estimate})
+            gas_cap = min(gas_estimate * 2, 500000)
+            tx_hash = tx.transact({'from': w3.eth.default_account, 'gas': gas_cap})
             # Wait for transaction to be mined
             tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
             
@@ -658,11 +779,11 @@ def redeem_bond():
             
         except Exception as e:
             logger.error(f"Smart contract transaction failed for redeem bond: {e}")
-            return jsonify({"error": f"Smart contract transaction failed: {str(e)}"}), 500
-        
+            return jsonify({"error": "Transaction failed on blockchain. Please try again."}), 500
+
     except Exception as e:
         logger.error(f"Unexpected error in redeem_bond: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/bond/<int:bond_id>/info', methods=['GET'])
 def get_bond_info(bond_id):
@@ -707,11 +828,12 @@ def get_bond_info(bond_id):
                 
         except Exception as e:
             logger.error(f"Failed to retrieve bond info from smart contract for bond {bond_id}: {e}")
-            return jsonify({"error": f"Failed to retrieve bond info from smart contract: {str(e)}"}), 500
-        
+            return jsonify({"error": "Failed to retrieve bond info"}), 500
+
     except Exception as e:
         logger.error(f"Unexpected error in get_bond_info for bond {bond_id}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
+
 
 @app.route('/bond/<int:bond_id>/holders', methods=['GET'])
 def get_bond_holders(bond_id):
@@ -732,11 +854,12 @@ def get_bond_holders(bond_id):
             }), 200
         except Exception as e:
             logger.error(f"Failed to retrieve bond holders from smart contract for bond {bond_id}: {e}")
-            return jsonify({"error": f"Failed to retrieve bond holders from smart contract: {str(e)}"}), 500
-        
+            return jsonify({"error": "Failed to retrieve bond holders"}), 500
+
     except Exception as e:
         logger.error(f"Unexpected error in get_bond_holders for bond {bond_id}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
+
 
 @app.route('/bond/<int:bond_id>/holder/<holder_address>/amount', methods=['GET'])
 def get_bond_holder_amount(bond_id, holder_address):
@@ -765,11 +888,11 @@ def get_bond_holder_amount(bond_id, holder_address):
             }), 200
         except Exception as e:
             logger.error(f"Failed to retrieve bond holder amount from smart contract for bond {bond_id}, holder {holder_address}: {e}")
-            return jsonify({"error": f"Failed to retrieve bond holder amount from smart contract: {str(e)}"}), 500
-        
+            return jsonify({"error": "Failed to retrieve holder amount"}), 500
+
     except Exception as e:
         logger.error(f"Unexpected error in get_bond_holder_amount for bond {bond_id}, holder {holder_address}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/bond/count', methods=['GET'])
 def get_bond_count():
@@ -779,7 +902,7 @@ def get_bond_count():
         not_ready = _chain_ready_response()
         if not_ready:
             return not_ready
-        
+
         try:
             count = contract.functions.bondCount().call()
             logger.debug(f"Retrieved bond count: {count}")
@@ -788,11 +911,52 @@ def get_bond_count():
             }), 200
         except Exception as e:
             logger.error(f"Failed to retrieve bond count from smart contract: {e}")
-            return jsonify({"error": f"Failed to retrieve bond count from smart contract: {str(e)}"}), 500
-        
+            return jsonify({"error": "Failed to retrieve bond count"}), 500
+
     except Exception as e:
         logger.error(f"Unexpected error in get_bond_count: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@app.route('/bond/all', methods=['GET'])
+def get_all_bonds():
+    """M-08 FIX: Batch endpoint — returns all bonds in a single call (replaces N+1 frontend calls)."""
+    try:
+        logger.info("Get all bonds endpoint called")
+        not_ready = _chain_ready_response()
+        if not_ready:
+            return not_ready
+
+        try:
+            count = contract.functions.bondCount().call()
+            bonds = []
+            for i in range(1, count + 1):
+                try:
+                    bond_info = contract.functions.getBondInfo(i).call()
+                    if isinstance(bond_info, dict):
+                        bonds.append({"bondId": i, **bond_info})
+                    else:
+                        bonds.append({
+                            "bondId": i,
+                            "name": bond_info[0],
+                            "issuer": bond_info[1],
+                            "faceValue": bond_info[2],
+                            "maturityDate": bond_info[3],
+                            "interestRate": bond_info[4],
+                            "totalSupply": bond_info[5],
+                            "isActive": bond_info[6],
+                        })
+                except Exception as e:
+                    logger.warning(f"Could not retrieve bond {i}: {e}")
+            logger.debug(f"Retrieved {len(bonds)} bonds")
+            return jsonify({"bonds": bonds, "bondCount": count}), 200
+        except Exception as e:
+            logger.error(f"Failed to retrieve all bonds from smart contract: {e}")
+            return jsonify({"error": "Failed to retrieve bonds"}), 500
+
+    except Exception as e:
+        logger.error(f"Unexpected error in get_all_bonds: {e}")
+        return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/status', methods=['GET'])
 def get_api_status():
@@ -1277,5 +1441,6 @@ def crypto_trending():
 if __name__ == "__main__":
     # Allow overriding port via environment variable (default 5000)
     port = int(os.getenv("PORT", 5000))
-    # Run the Flask development server; host 0.0.0.0 to allow container/local access
-    app.run(host="0.0.0.0", port=port, debug=True)
+    # C-03 FIX: debug mode controlled by environment — never True in production
+    debug_mode = os.getenv('DEBUG', 'false').lower() in ('true', '1', 'yes')
+    app.run(host="0.0.0.0", port=port, debug=debug_mode)

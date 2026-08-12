@@ -9,7 +9,6 @@ import {
   Spin,
   Alert,
   Typography,
-  Divider,
   Row,
   Col,
   Statistic,
@@ -25,6 +24,9 @@ import {
 import { useParams, useNavigate } from 'react-router-dom'
 import bondAPI from '../services/api'
 import dayjs from 'dayjs'
+
+// M-10 FIX: Configurable block explorer URL (defaults to Etherscan for mainnet)
+const BLOCK_EXPLORER = import.meta.env.VITE_BLOCK_EXPLORER || 'https://etherscan.io'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -251,7 +253,7 @@ const BondDetail = () => {
                 key: 'address',
                 render: (addr) => (
                   <a
-                    href={`https://etherscan.io/address/${addr}`}
+                    href={`${BLOCK_EXPLORER}/address/${addr}`}
                     target="_blank"
                     rel="noopener noreferrer"
                   >

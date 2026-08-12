@@ -2,9 +2,10 @@
 pragma solidity ^0.8.21;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burn.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract BondToken is ERC20, Ownable {
+contract BondToken is ERC20, ERC20Burn, Ownable {
     uint256 public constant INITIAL_SUPPLY = 1000000 * 10**18; // 1 million tokens with 18 decimals
 
     constructor(

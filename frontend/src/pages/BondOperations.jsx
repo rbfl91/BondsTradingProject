@@ -8,8 +8,8 @@ import {
   Button,
   Select,
   message,
+  DatePicker,
   Space,
-  Descriptions,
   Alert,
   Typography,
   Result,
@@ -21,9 +21,9 @@ import {
   SwapOutlined,
   ReloadOutlined,
   CheckCircleOutlined,
-  CloseCircleOutlined,
 } from '@ant-design/icons'
 import bondAPI from '../services/api'
+import dayjs from 'dayjs'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -35,13 +35,13 @@ const BondOperations = () => {
   const [bonds, setBonds] = useState([])
   const [form] = Form.useForm()
 
-  // Load bonds list for dropdowns
+  // Load bonds list via batch endpoint
   const loadBonds = async () => {
     try {
-      const allBonds = await bondAPI.getAllBonds()
-      setBonds(allBonds)
+      const data = await bondAPI.getAllBonds()
+      setBonds(data.bonds || [])
     } catch (err) {
-      console.error('Failed to load bonds:', err)
+      // Silently fail — dropdown will just be empty
     }
   }
 
@@ -58,7 +58,11 @@ const BondOperations = () => {
       let result
       switch (activeTab) {
         case 'issue':
-          result = await bondAPI.issueBond(values)
+          // M-09 FIX: Convert DatePicker value to Unix timestamp for the API
+          result = await bondAPI.issueBond({
+            ...values,
+            maturityDate: values.maturityDate?.unix(),
+          })
           break
         case 'purchase':
           result = await bondAPI.purchaseBond(values.bondId, values.amount)
@@ -133,38 +137,27 @@ const BondOperations = () => {
     )
   }
 
-  // Tab definitions
   const tabItems = [
     {
       key: 'issue',
-      label: (
-        <span>
-          <PlusOutlined /> Issue Bond
-        </span>
-      ),
+      label: <span><PlusOutlined /> Issue Bond</span>,
       children: (
         <IssueBondForm
           form={form}
           loading={loading}
           onSubmit={handleSubmit}
-          onCancel={handleCancel}
           error={error}
         />
       ),
     },
     {
       key: 'purchase',
-      label: (
-        <span>
-          <ShoppingCartOutlined /> Purchase Bond
-        </span>
-      ),
+      label: <span><ShoppingCartOutlined /> Purchase Bond</span>,
       children: (
         <PurchaseBondForm
           form={form}
           loading={loading}
           onSubmit={handleSubmit}
-          onCancel={handleCancel}
           error={error}
           bonds={bondOptions}
         />
@@ -172,17 +165,12 @@ const BondOperations = () => {
     },
     {
       key: 'sell',
-      label: (
-        <span>
-          <SwapOutlined /> Sell Bond
-        </span>
-      ),
+      label: <span><SwapOutlined /> Sell Bond</span>,
       children: (
         <SellBondForm
           form={form}
           loading={loading}
           onSubmit={handleSubmit}
-          onCancel={handleCancel}
           error={error}
           bonds={bondOptions}
         />
@@ -190,17 +178,12 @@ const BondOperations = () => {
     },
     {
       key: 'redeem',
-      label: (
-        <span>
-          <ReloadOutlined /> Redeem Bond
-        </span>
-      ),
+      label: <span><ReloadOutlined /> Redeem Bond</span>,
       children: (
         <RedeemBondForm
           form={form}
           loading={loading}
           onSubmit={handleSubmit}
-          onCancel={handleCancel}
           error={error}
           bonds={bondOptions}
         />
@@ -272,17 +255,17 @@ const IssueBondForm = ({ form, loading, onSubmit, error }) => (
       />
     </Form.Item>
 
+    {/* M-09 FIX: Use DatePicker instead of raw Unix timestamp input */}
     <Form.Item
       name="maturityDate"
-      label="Maturity Date (Unix Timestamp)"
-      rules={[{ required: true, message: 'Please enter the maturity date' }]}
+      label="Maturity Date"
+      rules={[{ required: true, message: 'Please select the maturity date' }]}
     >
-      <InputNumber
-        placeholder="e.g., 1893456000 (01/01/2030)"
+      <DatePicker
+        placeholder="Select maturity date"
         style={{ width: '100%' }}
-        min={Math.floor(Date.now() / 1000)}
         size="large"
-        addonAfter="Unix Timestamp"
+        disabledDate={(current) => current && current.isBefore(dayjs().endOf('day'))}
       />
     </Form.Item>
 
@@ -350,7 +333,6 @@ const PurchaseBondForm = ({ form, loading, onSubmit, error, bonds }) => (
         placeholder="Select a bond to purchase"
         size="large"
         options={bonds}
-        loading={bonds.length === 0}
       />
     </Form.Item>
 
@@ -399,7 +381,6 @@ const SellBondForm = ({ form, loading, onSubmit, error, bonds }) => (
         placeholder="Select a bond to sell"
         size="large"
         options={bonds}
-        loading={bonds.length === 0}
       />
     </Form.Item>
 
@@ -430,7 +411,6 @@ const SellBondForm = ({ form, loading, onSubmit, error, bonds }) => (
       <Input
         placeholder="0x..."
         size="large"
-        prefix="0x"
       />
     </Form.Item>
 
@@ -466,7 +446,6 @@ const RedeemBondForm = ({ form, loading, onSubmit, error, bonds }) => (
         placeholder="Select a bond to redeem"
         size="large"
         options={bonds}
-        loading={bonds.length === 0}
       />
     </Form.Item>
 
@@ -498,7 +477,6 @@ const RedeemBondForm = ({ form, loading, onSubmit, error, bonds }) => (
   </Form>
 )
 
-// Helper function for operation labels
 function getOperationLabel(op) {
   const labels = {
     issue: 'Bond Issued',

@@ -11,7 +11,13 @@ CONTRACT_ADDRESS = os.getenv('CONTRACT_ADDRESS', '')
 CONTRACT_ABI = os.getenv('CONTRACT_ABI', '')
 
 # Authentication token (simple bearer token)
-AUTH_TOKEN = os.getenv('AUTH_TOKEN', 'default-token')
+# C-01 FIX: No default fallback — AUTH_TOKEN MUST be set in .env
+AUTH_TOKEN = os.getenv('AUTH_TOKEN')
+if not AUTH_TOKEN:
+    raise RuntimeError(
+        "AUTH_TOKEN environment variable is not set. "
+        "Set it in your .env file. Generate one with: openssl rand -hex 32"
+    )
 
 # Owner account for contract interactions (will be used as default tx sender if set)
 OWNER_ADDRESS = os.getenv('OWNER_ADDRESS', '')

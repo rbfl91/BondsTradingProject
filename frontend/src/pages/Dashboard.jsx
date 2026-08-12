@@ -11,16 +11,11 @@ import {
   Alert,
   Typography,
   Button,
-  Timeline,
 } from 'antd'
 import {
-  ArrowUpOutlined,
-  ArrowDownOutlined,
   DollarOutlined,
   TeamOutlined,
-  CheckCircleOutlined,
   ClockCircleOutlined,
-  LinkOutlined,
   SyncOutlined,
   BookOutlined,
 } from '@ant-design/icons'
@@ -44,7 +39,6 @@ const Dashboard = () => {
   const [apiStatus, setApiStatus] = useState(null)
   const [bonds, setBonds] = useState([])
   const [bondCount, setBondCount] = useState(0)
-  const [operations, setOperations] = useState([])
   const [chartData, setChartData] = useState([])
   const [refreshing, setRefreshing] = useState(false)
 
@@ -52,73 +46,31 @@ const Dashboard = () => {
     setRefreshing(true)
     try {
       setError(null)
-      
+
       // Get API status
       const status = await bondAPI.getStatus()
       setApiStatus(status)
 
-      // Get bond count
-      const countData = await bondAPI.getBondCount()
-      setBondCount(countData.bondCount)
-
-      // Get all bonds
-      const allBonds = await bondAPI.getAllBonds()
-      setBonds(allBonds)
+      // Get all bonds via batch endpoint (M-08 fix — single call instead of N+1)
+      const allBondsData = await bondAPI.getAllBonds()
+      const bondsList = allBondsData.bonds || []
+      setBonds(bondsList)
+      setBondCount(allBondsData.bondCount || bondsList.length)
 
       // Generate chart data from bond info
-      const chartData = allBonds.map((bond) => ({
+      const chartData = bondsList.map((bond) => ({
         name: bond.name,
         faceValue: bond.faceValue,
         interestRate: bond.interestRate,
         supply: bond.totalSupply,
       }))
       setChartData(chartData)
-
-      // Generate mock operations history (in production, this would come from blockchain events)
-      const mockOperations = generateMockOperations(allBonds)
-      setOperations(mockOperations)
     } catch (err) {
       setError(err.response?.data?.error || err.message || 'Failed to fetch data')
     } finally {
       setLoading(false)
       setRefreshing(false)
     }
-  }
-
-  const generateMockOperations = (bonds) => {
-    // In a real implementation, this would parse blockchain events
-    const types = ['issue', 'purchase', 'sell', 'redeem']
-    const typeIcons = {
-      issue: <CheckCircleOutlined style={{ color: '#52c41a' }} />,
-      purchase: <ArrowUpOutlined style={{ color: '#1890ff' }} />,
-      sell: <ArrowDownOutlined style={{ color: '#faad14' }} />,
-      redeem: <CheckCircleOutlined style={{ color: '#13c2c2' }} />,
-    }
-    const typeColors = {
-      issue: 'green',
-      purchase: 'blue',
-      sell: 'orange',
-      redeem: 'cyan',
-    }
-    const typeLabels = {
-      issue: 'Bond Issued',
-      purchase: 'Bond Purchased',
-      sell: 'Bond Sold',
-      redeem: 'Bond Redeemed',
-    }
-
-    return Array.from({ length: Math.min(10, bonds.length * 2) }, (_, i) => ({
-      key: i,
-      type: types[i % types.length],
-      label: typeLabels[types[i % types.length]],
-      color: typeColors[types[i % types.length]],
-      icon: typeIcons[types[i % types.length]],
-      bondId: bonds[i % bonds.length]?.bondId || i + 1,
-      bondName: bonds[i % bonds.length]?.name || `Bond #${i + 1}`,
-      amount: Math.floor(Math.random() * 10000) + 100,
-      date: dayjs().subtract(i, 'day').format('DD/MM/YYYY HH:mm'),
-      txHash: `0x${Math.random().toString(16).substr(2, 40)}`,
-    }))
   }
 
   useEffect(() => {
@@ -136,47 +88,6 @@ const Dashboard = () => {
     bonds.length > 0
       ? bonds.reduce((sum, b) => sum + (b.interestRate || 0), 0) / bonds.length
       : 0
-
-  const columns = [
-    {
-      title: 'Type',
-      dataIndex: 'label',
-      key: 'label',
-      render: (text, record) => (
-        <Space>
-          {record.icon}
-          <Tag color={record.color}>{text}</Tag>
-        </Space>
-      ),
-    },
-    {
-      title: 'Bond',
-      dataIndex: 'bondName',
-      key: 'bondName',
-    },
-    {
-      title: 'Amount',
-      dataIndex: 'amount',
-      key: 'amount',
-      render: (val) => <Text strong>{val.toLocaleString()}</Text>,
-    },
-    {
-      title: 'Date',
-      dataIndex: 'date',
-      key: 'date',
-      sorter: (a, b) => dayjs(a.date, 'DD/MM/YYYY HH:mm').diff(dayjs(b.date, 'DD/MM/YYYY HH:mm')),
-    },
-    {
-      title: 'Transaction',
-      dataIndex: 'txHash',
-      key: 'txHash',
-      render: (hash) => (
-        <a href={`https://etherscan.io/tx/${hash}`} target="_blank" rel="noopener noreferrer">
-          <LinkOutlined /> {hash.substr(0, 10)}...
-        </a>
-      ),
-    },
-  ]
 
   if (loading) {
     return (
@@ -308,7 +219,7 @@ const Dashboard = () => {
           </ResponsiveContainer>
         ) : (
           <div style={{ textAlign: 'center', padding: 40, color: '#8c8c8c' }}>
-            No bonds issued yet. Go to "Operações" to issue your first bond.
+            No bonds issued yet. Go to "Bond Operations" to issue your first bond.
           </div>
         )}
       </Card>
@@ -368,27 +279,8 @@ const Dashboard = () => {
         </Card>
       )}
 
-      {/* Operations History */}
-      <Card title="Operations History">
-        <Timeline
-          items={operations.map((op) => ({
-            key: op.key,
-            color: op.color,
-            children: (
-              <div>
-                <Space>
-                  {op.icon}
-                  <Tag color={op.color}>{op.label}</Tag>
-                  <Text strong>{op.bondName}</Text>
-                </Space>
-                <div style={{ marginTop: 4, color: '#8c8c8c', fontSize: 12 }}>
-                  Amount: {op.amount.toLocaleString()} | {op.date} | TX: {op.txHash.substr(0, 18)}...
-                </div>
-              </div>
-            ),
-          }))}
-        />
-      </Card>
+      {/* H-11 FIX: Removed mock operations history — it showed fake tx hashes
+          as if they were real blockchain events, misleading users. */}
     </div>
   )
 }

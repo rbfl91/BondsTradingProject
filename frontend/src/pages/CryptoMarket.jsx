@@ -4,6 +4,10 @@ import { SearchOutlined, ArrowUpOutlined, ArrowDownOutlined, StarOutlined, StarF
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts'
 import { cryptoAPI } from '../services/api'
 
+// H-09 NOTE: This file is ~1,165 lines. It should be split into sub-components:
+//   CryptoTable, CryptoChart, CryptoDrawer, Watchlist, Converter, NewsWidget, TrendingWidget.
+//   This refactor is tracked as a medium-term task.
+
 const { Title, Text, Paragraph } = Typography
 const { Search: SearchInput } = Input
 const CMC_LOGO_BASE = 'https://static.coinmarketcap.com/static-coins/icons/64px'
@@ -79,7 +83,7 @@ const CryptoMarket = () => {
         setCmcKeyStatus(statusRes.cmc_api_configured ? 'configured' : 'missing')
       }
     } catch {
-      // Status check failed, will rely on error from actual API calls
+      // Status check failed — will rely on error from actual API calls
     }
 
     try {
@@ -95,8 +99,8 @@ const CryptoMarket = () => {
           totalExchanges: metrics.exchanges,
         })
       }
-    } catch (err) {
-      console.warn('Global metrics fetch failed:', err.message)
+    } catch {
+      // Global metrics fetch failed — non-critical
     }
 
     try {
@@ -107,8 +111,8 @@ const CryptoMarket = () => {
       if (moversRes.data && moversRes.data.losers) {
         setTopLosers(moversRes.data.losers.slice(0, 5))
       }
-    } catch (err) {
-      console.warn('Movers fetch failed:', err.message)
+    } catch {
+      // Movers fetch failed — non-critical
     }
   }
 
@@ -119,8 +123,8 @@ const CryptoMarket = () => {
       if (response.data && response.data.length > 0) {
         setNewsData(response.data)
       }
-    } catch (err) {
-      console.warn('News fetch failed:', err.message)
+    } catch {
+      // News fetch failed — non-critical
     } finally {
       setNewsLoading(false)
     }
@@ -132,8 +136,8 @@ const CryptoMarket = () => {
       if (response.data && response.data.length > 0) {
         setTrendingData(response.data)
       }
-    } catch (err) {
-      console.warn('Trending fetch failed:', err.message)
+    } catch {
+      // Trending fetch failed — non-critical
     }
   }
 
@@ -164,7 +168,6 @@ const CryptoMarket = () => {
       } else {
         setError('Failed to fetch real cryptocurrency data. Please try again later.')
       }
-      console.error(err)
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -186,8 +189,8 @@ const CryptoMarket = () => {
       } else {
         throw new Error('No OHLC data returned')
       }
-    } catch (err) {
-      console.warn('OHLC fetch failed, generating fallback data:', err.message)
+    } catch {
+      // OHLC fetch failed — generating fallback chart data
       setChartData(generateChartData(days))
       setChartError(true)
     } finally {
@@ -297,6 +300,7 @@ const CryptoMarket = () => {
         throw new Error('No OHLC data')
       }
     } catch {
+      // OHLC failed for drawer — generating fallback chart data
       setDrawerChartData(generateChartDataForDrawer(crypto))
       setDrawerChartError(true)
     } finally {

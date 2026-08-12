@@ -52,4 +52,14 @@ Thumbs.db
 
 # Truffle
 truffle-config.js
-node_modules
+
+# Debug / utility artifacts (L-09)
+fix_spins.*
+inspect.js
+check_lines.js
+fix.ps1
+broswerConsolerIssues.jpg
+
+# IDE / build artifacts
+*.code-workspace
+.env.bak
