@@ -411,7 +411,10 @@ Certificate-gate residuals were closed on 2026-08-15 (see the addendum in
   (contracts, API, frontend tests **and** lint).
 - **L-06 (P2):** stray parent-folder `node_modules` deleted.
 
-Full re-validation (25 contract / 42 API / 22 frontend tests + OpenAPI)
-remains to be run against the post-certificate commit before sign-off.
+Full re-validation **complete**: GitHub Actions CI run #4 on commit `e8a504d`
+(2026-08-15) — all 3 jobs green: 25 contract tests (Node 22), 42 API tests
++ OpenAPI validation, 22 frontend tests + ESLint gate. CI re-runs on every
+push/PR. (The CI pass caught and fixed one M-01-deletion regression: the
+`@app.route('/health')` decorator, restored in `e8a504d`.)
 
 ---

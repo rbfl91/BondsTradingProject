@@ -92,10 +92,11 @@ items listed here; §3 validation evidence remains as of `74349dd`).
 | **M-05** (P2 residual) | P2 | **ESLint 9 flat config** (`frontend/eslint.config.js`: js recommended + react + react-hooks; `react/jsx-uses-vars` for JSX component usage) + `npm run lint` script + **GitHub Actions CI** (`.github/workflows/ci.yml`: contracts, API+OpenAPI, frontend tests **and** lint). 21 pre-existing lint errors fixed (unused imports/vars, unescaped JSX entities, dead `totalInterest` calc, dead `error` props). | `frontend/eslint.config.js`, `frontend/package.json`, `.github/workflows/ci.yml` |
 | **L-06** (P2 residual) | P2 | Stray parent-folder `node_modules` (adm-zip 0.6.0 + lockfile fragment, 192 KB, outside the repo) **deleted**. | filesystem, outside repo |
 
-### Re-validation status (addendum)
+### Re-validation status (addendum) — COMPLETE
 
-- Frontend: **22/22 tests pass** (15 prior + 7 new `auth.test.js`) and **lint green** (0 errors; 2 advisory `react-hooks/exhaustive-deps` warnings by design) — run 2026-08-15.
-- OpenAPI: **valid** (`python api/validate_openapi.py`) after `ApiStatusResponse` extension — run 2026-08-15.
-- Contracts: unchanged since `74349dd` (no contract edits in this pass) — prior 25/25 evidence stands.
-- **API suite (42 tests): NOT yet re-run** against `d07c122` (deferred at owner’s request until all fixes landed). The only API change is the additive `GET /status.economic_model` field; re-run is the sole open re-validation item before sign-off.
-- Full CI (`.github/workflows/ci.yml`) covers all of the above on the next push.
+- Frontend: **22/22 tests pass** (15 prior + 7 new `auth.test.js`) and **lint green** (0 errors; 2 advisory `react-hooks/exhaustive-deps` warnings by design).
+- OpenAPI: **valid** (`python api/validate_openapi.py`) after `ApiStatusResponse` extension.
+- Contracts: **25/25 pass** on Node 22 (Hardhat 3.13 requires ≥ 22.13).
+- API: **42/42 pass** (CI run #4, commit `e8a504d`, 2026-08-15).
+- Full re-validation **complete**: GitHub Actions run #4 (commit `e8a504d`, 2026-08-15) — all 3 jobs green (Smart contracts 24 s, API 20 s, Frontend 25 s). CI (`.github/workflows/ci.yml`) re-runs on every push/PR going forward.
+- Note: the CI pass also caught one regression introduced by the M-01 deletion — the `@app.route('/health')` decorator had been removed along with the dead block (health endpoint 404); restored and verified in `e8a504d` (all 23 routes identical to baseline `74349dd`).
