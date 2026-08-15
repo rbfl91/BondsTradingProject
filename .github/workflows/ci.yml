@@ -5,6 +5,9 @@ on:
   push:
     branches: [master]
   pull_request:
+  # Manual "Run workflow" button (Actions UI) — useful for re-testing the
+  # current workflow version without a code change.
+  workflow_dispatch:
 
 jobs:
   contracts:
