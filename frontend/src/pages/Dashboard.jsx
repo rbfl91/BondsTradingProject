@@ -236,7 +236,9 @@ const Dashboard = () => {
             size="small"
             onRow={(record) => ({
               style: { cursor: 'pointer' },
-              onClick: () => window.open(`#/bond/${record.bondId}`, '_blank'),
+              // H-07 FIX: the app uses BrowserRouter — `#/bond/...` hash URLs
+              // load `/` and redirect to the dashboard. Open the real path instead.
+              onClick: () => window.open(`/bond/${record.bondId}`, '_blank'),
             })}
             columns={[
               { title: 'ID', dataIndex: 'bondId', key: 'bondId', width: 80 },
