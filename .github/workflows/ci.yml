@@ -1,0 +1,43 @@
+# M-05: CI gates — contract tests, API tests, frontend tests + ESLint.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  contracts:
+    name: Smart contracts (Hardhat)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm test # 25 tests, built-in Hardhat network (no external node)
+
+  api:
+    name: API (pytest + OpenAPI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r api/requirements.txt
+      - run: cd api && python -m pytest test_api.py # 42 tests, hermetic (no .env / live node)
+      - run: python api/validate_openapi.py
+
+  frontend:
+    name: Frontend (lint + vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: cd frontend && npm ci
+      - run: cd frontend && npm run lint # M-05: ESLint gate
+      - run: cd frontend && npm test # vitest suite

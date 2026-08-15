@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Button, Typography, Spin, Alert, Row, Col, Space } from 'antd'
+import { Button, Typography, Spin, Alert, Row, Col } from 'antd'
 import {
   GlobalOutlined, SyncOutlined, WarningOutlined, CheckCircleOutlined,
 } from '@ant-design/icons'

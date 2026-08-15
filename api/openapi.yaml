@@ -728,6 +728,18 @@ components:
         status:
           type: string
           example: API is running
+        model:
+          type: string
+          description: >
+            C-01 custody scope: single-tenant owner dashboard (all txs signed
+            by the operator key), not a multi-user custody service.
+          example: single-tenant owner dashboard (all txs signed by the operator key)
+        economic_model:
+          type: string
+          description: >
+            H-02 scope lock: bookkeeping-only — no coupons, pricing engine,
+            or fees; interestRate (bps) is recorded, not paid.
+          example: bookkeeping-only (no coupons/pricing/fees; interestRate recorded, not paid)
         blockchain_connected:
           type: boolean
         endpoints:
@@ -737,6 +749,7 @@ components:
       example:
         status: "API is running"
         model: "single-tenant owner dashboard (all txs signed by the operator key)"
+        economic_model: "bookkeeping-only (no coupons/pricing/fees; interestRate recorded, not paid)"
         blockchain_connected: true
         endpoints:
           - "/health"

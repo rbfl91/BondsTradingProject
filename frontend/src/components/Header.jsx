@@ -1,12 +1,14 @@
 import React from 'react'
-import { Layout, Menu, Typography, Space, Badge } from 'antd'
+import { Layout, Menu, Typography, Space, Badge, Button, Tooltip } from 'antd'
 import { Link, useLocation } from 'react-router-dom'
 import {
   DashboardOutlined,
   TransactionOutlined,
   ApiOutlined,
   PieChartOutlined,
+  KeyOutlined,
 } from '@ant-design/icons'
+import { requestTokenPrompt } from '../auth'
 
 const { Header: AntHeader } = Layout
 
@@ -55,7 +57,19 @@ const Header = () => {
           style={{ border: 'none', fontSize: '14px' }}
         />
       </Space>
-      <Badge count="Live" size="small" color="green" />
+      <Space size="middle" align="center">
+        {/* H-04: operator can (re)enter the runtime API token */}
+        <Tooltip title="Enter the operator API token (stored in this browser only)">
+          <Button
+            icon={<KeyOutlined />}
+            onClick={() => requestTokenPrompt()}
+            aria-label="API token"
+          >
+            API Token
+          </Button>
+        </Tooltip>
+        <Badge count="Live" size="small" color="green" />
+      </Space>
     </AntHeader>
   )
 }

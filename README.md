@@ -2,6 +2,37 @@
 
 A Python REST API that provides endpoints to interact with Bond Trading smart contracts.
 
+## Custody Model (read first — C-01)
+
+> **This product is a single-tenant, operator-signed owner dashboard — NOT a
+> multi-user self-custody marketplace.**
+
+- There is **one operator key** (`OWNER_ADDRESS`, or the node's first account).
+  Every on-chain transaction the API sends is signed by that key.
+- UI "users" do **not** have independent on-chain identities. Bond positions
+  and token balances belong to the operator's account; `sell` transfers a
+  bookkeeping position to an address the operator chooses, and the operator
+  key remains the sole signer.
+- Per-user on-chain identity (user-supplied or embedded wallets) is a
+  deliberate scope decision, **not** an MVP feature (audit C-01, option b).
+- The same statement is exposed at runtime in `GET /status` (`model` field) and
+  in `AGENTS.md`. Do not market this as a multi-user custody service without a
+  corresponding architecture change.
+
+## Economic Model (MVP scope — H-02)
+
+> **Bookkeeping-only model. There is deliberately no pricing/coupon engine.**
+
+- `interestRate` is recorded on the bond in **basis points** (500 = 5.00%) and
+  displayed in the UI, but **no interest is accrued or paid by any engine**.
+  Redemption settles the escrowed token principal at/after maturity only.
+- There are **no coupons, no secondary-market price discovery, and no fees**.
+  `sell` is a position transfer at face bookkeeping values; `purchase` is
+  primary-market only (escrow of `BondToken` ERC20s).
+- This scope lock is the closure for audit finding H-02: a market pricing /
+  coupon / fee engine is out of scope for the MVP by design, and the scope is
+  exposed at runtime in `GET /status` (`economic_model` field).
+
 ## Features
 
 - Issue new bonds
@@ -51,8 +82,23 @@ A Python REST API that provides endpoints to interact with Bond Trading smart co
 
 1. Install dependencies:
 ```bash
-pip install -r requirements.txt
+pip install -r api/requirements.txt
 ```
+
+> **Authentication (H-04):** the API is fail-closed — every endpoint except
+> `/health` and the docs routes requires `Authorization: Bearer <AUTH_TOKEN>`.
+> The token is **never baked into the frontend bundle**:
+>
+> - **Dev:** the Vite dev proxy injects it server-side from `frontend/.env`
+>   (`AUTH_TOKEN`, untracked — see `frontend/.env.example`).
+> - **Production:** the reverse proxy / backend serving the SPA injects it
+>   server-side (see Operations below).
+> - **Direct API access:** the UI's “API Token” button (header) lets the
+>   operator paste the token at runtime; it is kept in that browser's
+>   `localStorage` only (per operator, revocable), and a 401 on any request
+>   prompts for it automatically.
+> - The API also refuses to start without `AUTH_TOKEN` set (generate one with
+>   `openssl rand -hex 32`).
 
 2. Start a local blockchain (from the repo root):
 ```bash
@@ -84,6 +130,7 @@ cd api && python app.py
 ### Issue a Bond
 ```bash
 curl -X POST http://localhost:5000/bond/issue \
+  -H "Authorization: Bearer $AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Test Bond",
@@ -98,6 +145,7 @@ curl -X POST http://localhost:5000/bond/issue \
 ### Purchase a Bond
 ```bash
 curl -X POST http://localhost:5000/bond/purchase \
+  -H "Authorization: Bearer $AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "bondId": 1,
@@ -107,7 +155,8 @@ curl -X POST http://localhost:5000/bond/purchase \
 
 ### Get Bond Info
 ```bash
-curl -X GET http://localhost:5000/bond/1/info
+curl http://localhost:5000/bond/1/info \
+  -H "Authorization: Bearer $AUTH_TOKEN"
 ```
 
 ## Testing
@@ -121,7 +170,30 @@ cd api && python -m pytest test_api.py
 
 # Frontend suite (vitest)
 cd frontend && npm test
+
+# Frontend lint gate (ESLint, M-05)
+cd frontend && npm run lint
 ```
+
+## Operations (runbook)
+
+**Custody model reminder (C-01):** this is an operator-signed owner dashboard.
+One operator key signs every transaction; there is no multi-user self-custody.
+
+1. **Generate the API token once per environment:** `openssl rand -hex 32`
+   → root `.env` (`AUTH_TOKEN`) and, for dev, `frontend/.env` (`AUTH_TOKEN`,
+   same value, used by the Vite proxy — the browser never sees it).
+2. **Rotate on suspicion of exposure:** change `AUTH_TOKEN`, restart the API,
+   update `frontend/.env` / the production proxy, and tell operators to
+   re-enter the token via the “API Token” button (it is stored per browser).
+3. **Deploying the frontend:** build (`cd frontend && npm run build`) and serve
+   the static files behind the same reverse proxy as the API (or a proxy in
+   front of it) that injects `Authorization: Bearer <AUTH_TOKEN>` on `/api/*`.
+   Never ship a build that embeds the token.
+4. **Rate limiting / proxying:** set `TRUST_PROXY=true` only behind a trusted
+   reverse proxy; keep the API off the public internet otherwise.
+5. **ABI artifact:** after contract changes, run `npm run build` in the repo
+   root so the API can load the ABI artifact (fail-fast, M-01).
 
 ## Local Development
 

@@ -1,11 +1,41 @@
 # Bond Trading Project - Agent Instructions
 
+## Tooling & Search Rules (READ FIRST — hang prevention)
+
+This checkout sits on a Windows filesystem (git-bash) where scanning large file
+sets is very slow. The repo contains **huge untracked dirs**: `node_modules/`,
+`frontend/node_modules/`, `api/venv/` (all gitignored). One session lost an
+agent turn to a hung `grep -rn X --include="*" .` that walked them.
+
+1. **Search with `rg` (ripgrep) or `git grep` — never `grep -r .` / `find .`.**
+   Both skip gitignored dirs automatically (node_modules, venv, .git).
+   - `rg "pattern"` — search tracked + untracked-but-not-ignored files
+   - `git grep "pattern"` — search tracked files only
+   - If you must use `grep`, scope it: `grep -rn pattern api frontend/src contracts scripts test`
+2. **Always pass a `timeout` to one-shot shell commands** (e.g. 30–60 s for
+   searches/builds, 300 s max for npm installs). The harness has **no default
+   timeout** — an unbounded command blocks the session indefinitely.
+3. **After an interrupted command, run `pwd` first.** The working directory can
+   be reset (e.g. to the parent `Redbelly MVP/` folder); relative paths will
+   silently hit the wrong tree otherwise.
+4. `rg` is available at `~/.pi/agent/bin/rg` (already on PATH).
+
 ## Architecture
 
 - **Frontend**: React + Vite + Ant Design (`frontend/`)
 - **API**: Flask REST API (`api/app.py`)
 - **Smart Contracts**: Solidity + Hardhat 3 (`contracts/`, `scripts/`, `test/`)
 - **Blockchain**: Web3 integration with local Ethereum node (Hardhat node on port 8545)
+
+### Product scope (C-01 / H-02 — read before changing behaviour)
+
+- **Custody (C-01):** single-tenant, **operator-signed owner dashboard** — not a
+  multi-user self-custody marketplace. One operator key signs every tx; UI
+  "users" have no independent on-chain identity.
+- **Economics (H-02):** **bookkeeping-only** — no coupons, no pricing engine,
+  no fees. `interestRate` (basis points) is recorded/displayed, not paid.
+- Both scopes are surfaced at runtime via `GET /status` (`model`,
+  `economic_model` fields) and in the README.
 
 ## Package Boundaries
 
@@ -59,6 +89,9 @@ cd frontend && npm run build
 
 # Tests (vitest)
 cd frontend && npm test
+
+# Lint gate (ESLint, M-05 — also runs in CI)
+cd frontend && npm run lint
 ```
 
 ## Environment Setup
@@ -81,11 +114,18 @@ cd frontend && npm test
 
 Deployment script at `scripts/deploy.js` handles both.
 
-## API Authentication
+## API Authentication (H-04)
 
 - All endpoints except `/health`, `/docs`, `/openapi.yaml` require `Authorization: Bearer <token>` header
-- Token configured via `AUTH_TOKEN` env variable
-- Frontend stores token in `VITE_API_TOKEN` env variable
+- Token configured via `AUTH_TOKEN` env variable; the API **fails closed** (all
+  private routes 401) and refuses to start without it
+- **No static token in the frontend bundle.** Delivery paths:
+  - Dev: Vite proxy (`frontend/vite.config.js`) injects it server-side from
+    `frontend/.env` (`AUTH_TOKEN`, untracked)
+  - Prod: reverse proxy/backend serving the SPA injects it server-side
+  - Direct API access: operator pastes the token at runtime via the header's
+    “API Token” button → `AuthGate` (`src/components/AuthGate.jsx`); stored in
+    `localStorage` per browser (`src/auth.js`), revocable; any 401 re-prompts
 
 ## Testing
 

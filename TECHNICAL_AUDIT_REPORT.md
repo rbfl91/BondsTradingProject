@@ -323,12 +323,14 @@ Recommendation: add a contract test asserting token balances of contract *and* u
 
 ---
 
-## 11. Remediation Status (added 2026-08-15, commit `fb6e560`)
+## 11. Remediation Status (added 2026-08-15, commit `fb6e560`; post-certificate addendum 2026-08-15)
 
 > Everything above is the **original audit, unmodified** (state as of 2026-07).
 > This section is the only post-audit content: it maps each finding to its
 > outcome after the full remediation pass. Line numbers in the original text
 > are pre-refactor and intentionally not updated.
+> Statuses for H-02, H-04, M-01, M-05 and L-06 reflect the post-certificate
+> closure pass (see §11.4 and the addendum in AUDIT_CLOSURE_CERTIFICATE.md).
 
 Legend: ✅ fixed · ⚠️ mitigated / partially addressed (deferral noted) · ⛔ out of scope · ℹ️ no action needed
 
@@ -341,19 +343,19 @@ Legend: ✅ fixed · ⚠️ mitigated / partially addressed (deferral noted) · 
 | C-03 | Critical | `node_modules/`, `build/`, `frontend/dist/` committed | ✅ | 437 files untracked (`git rm -r --cached`), `.gitignore` extended (`/frontend/node_modules`, `/frontend/dist`). **Note:** the blobs remain in git *history* (`.git` size); a history rewrite / `git gc` is an optional follow-up, not done. |
 | C-03c | Critical | Uncapped `onlyOwner mint` | ✅ | `MAX_SUPPLY` hard cap on `BondToken.mint` + `Minted` event; cap behaviour asserted in tests (`npx hardhat test`). |
 | H-01 | High | Unbounded gas loops over holder arrays | ✅ | Array scans replaced by O(1) `mapping` membership checks; no unbounded iteration remains in state-changing paths. |
-| H-02 | High | No economic model; `isActive` unreachable; supply never decremented | ⚠️ | `remainingSupply` now decremented on purchase (supply check is live), `deactivateBond`/`activateBond` make the Inactive state reachable, `interestRate` is a first-class validated field (basis points, 0–10000). **Deferred:** market pricing, coupons, fees — out of MVP scope by design. |
+| H-02 | High | No economic model; `isActive` unreachable; supply never decremented | ✅ | `remainingSupply` now decremented on purchase (supply check is live), `deactivateBond`/`activateBond` make the Inactive state reachable, `interestRate` is a first-class validated field (basis points, 0–10000). **Scope locked (post-certificate):** product language now explicitly states the **bookkeeping-only** model — no coupons/pricing engine/fees; `interestRate` recorded, not paid (README “Economic Model (MVP scope — H-02)”, `GET /status` `economic_model` field, AGENTS.md). A pricing/coupon engine remains out of MVP scope by design. |
 | H-03 | High | Unbounded in-memory state (rate limiter, CMC cache) | ✅ | Rate-limit dict evicts idle IPs (bounded); CMC cache is LRU-bounded with TTL; both covered by tests. |
-| H-04 | High | Shared static token in bundle; non-constant-time compare | ⚠️ | Constant-time `hmac.compare_digest` + **fail-closed** (no `AUTH_TOKEN` → all private routes 401). **Deferred:** per-user credentials / server-side key management (product decision); token-in-bundle caveat documented (README, `I-02`). |
+| H-04 | High | Shared static token in bundle; non-constant-time compare | ✅ | Constant-time `hmac.compare_digest` + **fail-closed** (no `AUTH_TOKEN` → all private routes 401; API refuses to start). **Static bundle token removed (post-certificate):** `VITE_API_TOKEN` no longer exists — dev: Vite proxy injects `AUTH_TOKEN` server-side (`frontend/.env`, untracked); prod: reverse proxy/backend injects it; direct API access: runtime operator token via header “API Token” button → `AuthGate` (stored in `localStorage` per browser, revocable; 401 re-prompts). Covered by new `auth.test.js` (7 tests). **Deferred:** per-user (multi-user) credentials — blocked on the C-01(b) product decision. |
 | H-05 | High | Unauthenticated `/status` & `/contract/address` | ✅ | Removed from `exempt_paths`; only `/health` (+ `/docs`, `/openapi.yaml`) are unauthenticated. Covered by auth tests. |
 | H-06 / H-06b | High | CMC double-version URLs; `int()` on query params → 500 | ✅ | URLs corrected (`/v1/...`, `/v2/trending`), `_parse_int_param` returns 400 on bad input, client-side sanity bounds on all tx endpoints. URL construction asserted in tests. |
 | H-07 | High | Dashboard row click uses `#/bond/...` under BrowserRouter | ✅ | `Dashboard.jsx` now opens the real path (`/bond/<id>`). *(Fixed in the remediation commit that added this appendix.)* |
 | H-08 | High | Stale OpenAPI spec; validator deps missing | ✅ | `openapi.yaml` extended (`/bond/all`, all 8 `/crypto/*`, bps semantics, status model) and validates; `pyyaml`/`openapi-spec-validator` added to `requirements.txt`. |
 | H-09 | Med | `CryptoMarket.jsx` = 1,169 lines | ✅ | Split into 12 focused modules under `frontend/src/pages/crypto/` (widgets, table, drawer, formatters, `useWatchlist`); orchestrator reduced to 423 lines. |
-| M-01 | Med | Inline ~330-line ABI fallback; monolithic `app.py` | ⚠️ | ABI loading is now **artifact-only, fail-fast** (inline ABI deleted). **Deferred:** splitting `app.py` itself (still a single module) — tracked as future work. |
+| M-01 | Med | Inline ~330-line ABI fallback; monolithic `app.py` | ✅ | ABI loading is now **artifact-only, fail-fast**; the dead unreachable inline ABI block (~235 lines) after the fail-fast return path was deleted (post-certificate). **Deferred (M-01b):** splitting `app.py` itself (still a single module) — tracked as future work. |
 | M-02 / M-02c | Med | `/bond/all` N+1 RPC; no on-chain batch view | ✅ | `getBondsRange(start, count)` batch view added to `BondTrading`; `/bond/all` uses it (one RPC for the batch). |
 | M-03 | Med | Proxy-blind, endpoint-blind rate limiting | ✅ | Proxy-aware `_client_ip()` (honours `X-Forwarded-For` only when `TRUST_PROXY=true`), limiter applies to GET endpoints too, `Retry-After` header on 429. |
 | M-04 | Med | Uncached RSS + hardcoded fake news fallback | ✅ | Feed cached 15 min; on failure returns an **empty list with `source: "unavailable"`** — no more fake items presented as live. |
-| M-05 | Med | Zero frontend tests, no ESLint | ⚠️ | **Vitest + Testing Library added: 15 tests** (`npm test` — formatters, API service mapping, Header). **Deferred:** ESLint config. |
+| M-05 | Med | Zero frontend tests, no ESLint | ✅ | **Vitest + Testing Library: 22 tests** (`npm test` — formatters, API service mapping, Header, H-04 auth module). **ESLint gate added (post-certificate):** ESLint 9 flat config (`frontend/eslint.config.js`, js + react + react-hooks; `react/jsx-uses-vars` marks JSX components as used), `npm run lint` script, and a CI lint step (`.github/workflows/ci.yml`). |
 | M-06 | Med | Env-fragile import chain (tests only ran with `.env`) | ✅ | `config.py` no longer raises at import; `api/__init__.py` lazy (PEP 562); the 42-test suite is hermetic (no `.env`, no live node — verified with and without a node on 8545). |
 | M-07 | Med | README truncated mid-`curl`; rate semantics inconsistent | ✅ | README completed (all endpoints, auth, bps, testing, local-dev scripts); `interestRate` is basis points end-to-end (API validates 0–10000; form collects % and sends bps; detail/dashboard render `5.00% (500 bps)`). |
 | M-08 | Med | Dockerfile not production-grade; compose `DEBUG=true` | ✅ | `api/Dockerfile`: gunicorn, non-root user, healthcheck. `docker-compose.yml` **deleted** (dev path is the `.sh`/`.bat` scripts + Hardhat node); its `DEBUG=true`/fallback-token issues vanished with it. |
@@ -365,7 +367,7 @@ Legend: ✅ fixed · ⚠️ mitigated / partially addressed (deferral noted) · 
 | L-03 | Low | Rate limiter's `remaining` never surfaced | ✅ | Surfaced via the `Retry-After` header on 429 responses. |
 | L-04 | Low | Unrelated `duckhunt-bonds.html` in `frontend/public/` | ✅ | Deleted (decision: not part of the product). |
 | L-05 | Low | Audit report deleted in working tree | ✅ | Restored (this document). |
-| L-06 | Low | Stray `node_modules/adm-zip` in parent folder | ⛔ | Outside the repository — left on disk; safe to delete manually. |
+| L-06 | Low | Stray `node_modules/adm-zip` in parent folder | ✅ | Outside the repository — stray `node_modules` (adm-zip 0.6.0 + lockfile fragment, 192 KB) in the parent folder **deleted** on 2026-08-15 (post-certificate). |
 | L-07 | Low | Mixed-language UI ("Operações") | ✅ | Renamed to "Operations"; asserted by the Header test. |
 | L-08 | Low | Ineffective `.gitignore` entries; over-redacting log regex | ✅ | Files untracked (C-03), rules extended; redaction regex now targets actual secrets (hex keys, bearer tokens, checksummed addresses) instead of any 20+ char word. |
 | L-09 | Low | Swagger UI inlined in `app.py`; manual `Bearer ` prefix | ✅ | Docs externalized to `api/templates/docs.html` (served at `/docs`); spec at `/openapi.yaml`. |
@@ -379,68 +381,37 @@ Legend: ✅ fixed · ⚠️ mitigated / partially addressed (deferral noted) · 
 |-------|----------|-------------------|
 | Contracts | 15 (Truffle) | **25** (Hardhat 3 + viem; incl. full issue→purchase→sell→redeem cycle with balance assertions, mint-cap, holder pruning, sell-to-self, allowance revocation) |
 | API | 34 (env-fragile) | **42** (hermetic — no `.env`/live node required; verified green with and without a node on 8545) |
-| Frontend | 0 | **15** (Vitest + Testing Library: formatters, API service mapping, Header) |
+| Frontend | 0 | **22** (Vitest + Testing Library: formatters, API service mapping, Header, H-04 auth module) + **ESLint gate** (`npm run lint`, 0 errors) |
 | 3-tier integration | 0 | Still 0 in the suites — a manual 3-tier smoke (node + deploy + live API calls) was performed during remediation; an automated version remains a P2 item |
 
 ### 11.3 Remaining / deferred items
 
-1. **C-01 (b):** per-user on-chain identity (embedded or user-supplied wallets) — blocked on a product decision.
-2. **H-04 (b):** per-user credentials / server-side key management for real deployments.
-3. **M-01 (b):** split `api/app.py` into modules (auth, bonds, crypto, infra).
-4. **H-02 (b):** economic model (pricing/coupons/fees) — out of MVP scope.
-5. **M-05 (b):** ESLint for the frontend.
-6. **C-03 (follow-up):** optional git-history rewrite / `git gc` to shrink `.git` (437 files' worth of blobs are still in history).
-7. **L-06:** delete the stray `node_modules/` in the parent folder (outside the repo).
-8. **Testing:** one automated 3-tier integration test (node fixture → deploy → API).
+1. **C-01 (b):** per-user on-chain identity (embedded or user-supplied wallets) — blocked on a product decision. (Implies per-user credentials for H-04 as well.)
+2. **M-01 (b):** split `api/app.py` into modules (auth, bonds, crypto, infra).
+3. **H-02 (b):** a real economic model (pricing/coupons/fees engine) — out of MVP scope; scope language is locked (bookkeeping-only) until then.
+4. **C-03 (follow-up):** optional git-history rewrite / `git gc` to shrink `.git` (437 files' worth of blobs are still in history).
+5. **Testing:** one automated 3-tier integration test (node fixture → deploy → API).
+
+### 11.4 Post-certificate addendum (2026-08-15, after AUDIT_CLOSURE_CERTIFICATE.md)
+
+Certificate-gate residuals were closed on 2026-08-15 (see the addendum in
+`AUDIT_CLOSURE_CERTIFICATE.md`):
+
+- **C-01 (P0 condition):** explicit custody-model statement published in README
+  (“Custody Model (read first — C-01)”), AGENTS.md and the operations runbook
+  section; runtime exposure via `GET /status.model`.
+- **H-04 (P1):** static bundle token removed; server-side injection (dev proxy /
+  reverse proxy) + revocable runtime operator token (`src/auth.js`,
+  `AuthGate`); 7 new tests.
+- **H-02 (P1):** product scope language locked to the bookkeeping-only model
+  (README section, `GET /status.economic_model`, AGENTS.md).
+- **M-01 (P2):** dead inline ABI block removed from `api/app.py` (fail-fast
+  artifact loading only).
+- **M-05 (P2):** ESLint 9 flat config + `npm run lint` + GitHub Actions CI
+  (contracts, API, frontend tests **and** lint).
+- **L-06 (P2):** stray parent-folder `node_modules` deleted.
+
+Full re-validation (25 contract / 42 API / 22 frontend tests + OpenAPI)
+remains to be run against the post-certificate commit before sign-off.
 
 ---
-
-## 11. Remediation Status (added 2026-08-15, commit `fb6e560`)
-
-> Everything above is the **original audit, unmodified** (state as of 2026-07).
-> This section is the only post-audit content: it maps each finding to its
-> outcome after the full remediation pass. Line numbers in the original text
-> are pre-refactor and intentionally not updated.
-
-Legend: ✅ fixed · ⚠️ mitigated / partially addressed (deferral noted) · ⛔ out of scope · ℹ️ no action needed
-
-### 11.1 Findings
-
-| ID | Sev | Finding (short) | Status | Resolution |
-|----|-----|-----------------|--------|------------|
-| C-01 | Critical | Single signing key = custodial API | ⚠️ | Option (a) taken: documented as a **single-tenant owner dashboard** — `/status` `model` field, README, AGENTS.md. Option (b) (per-user wallets) **deferred**: needs a product/architecture decision (embedded wallets or user-supplied keys). |
-| C-02 / C-02b | Critical | Broken redemption flow; stale holder lists | ✅ | **Escrow model** in `BondTrading.sol`: `purchaseBond` escrows tokens via `transferFrom`, `redeemBond` **burns from the contract's own balance**, `sellBond` transfers the position mapping only. Holder lists pruned on zero balance (`bondHolderFlags`/`bondHolderIndex` mappings, O(1) membership). Full issue→purchase→sell→redeem cycle covered by contract tests (balance assertions on both sides). |
-| C-03 | Critical | `node_modules/`, `build/`, `frontend/dist/` committed | ✅ | 437 files untracked (`git rm -r --cached`), `.gitignore` extended (`/frontend/node_modules`, `/frontend/dist`). **Note:** the blobs remain in git *history* (`.git` size); a history rewrite / `git gc` is an optional follow-up, not done. |
-| C-03c | Critical | Uncapped `onlyOwner mint` | ✅ | `MAX_SUPPLY` hard cap on `BondToken.mint` + `Minted` event; cap behaviour asserted in tests (`npx hardhat test`). |
-| H-01 | High | Unbounded gas loops over holder arrays | ✅ | Array scans replaced by O(1) `mapping` membership checks; no unbounded iteration remains in state-changing paths. |
-| H-02 | High | No economic model; `isActive` unreachable; supply never decremented | ⚠️ | `remainingSupply` now decremented on purchase (supply check is live), `deactivateBond`/`activateBond` make the Inactive state reachable, `interestRate` is a first-class validated field (basis points, 0–10000). **Deferred:** market pricing, coupons, fees — out of MVP scope by design. |
-| H-03 | High | Unbounded in-memory state (rate limiter, CMC cache) | ✅ | Rate-limit dict evicts idle IPs (bounded); CMC cache is LRU-bounded with TTL; both covered by tests. |
-| H-04 | High | Shared static token in bundle; non-constant-time compare | ⚠️ | Constant-time `hmac.compare_digest` + **fail-closed** (no `AUTH_TOKEN` → all private routes 401). **Deferred:** per-user credentials / server-side key management (product decision); token-in-bundle caveat documented (README, `I-02`). |
-| H-05 | High | Unauthenticated `/status` & `/contract/address` | ✅ | Removed from `exempt_paths`; only `/health` (+ `/docs`, `/openapi.yaml`) are unauthenticated. Covered by auth tests. |
-| H-06 / H-06b | High | CMC double-version URLs; `int()` on query params → 500 | ✅ | URLs corrected (`/v1/...`, `/v2/trending`), `_parse_int_param` returns 400 on bad input, client-side sanity bounds on all tx endpoints. URL construction asserted in tests. |
-| H-07 | High | Dashboard row click uses `#/bond/...` under BrowserRouter | ✅ | `Dashboard.jsx` now opens the real path (`/bond/<id>`). *(Fixed in the remediation commit that added this appendix.)* |
-| H-08 | High | Stale OpenAPI spec; validator deps missing | ✅ | `openapi.yaml` extended (`/bond/all`, all 8 `/crypto/*`, bps semantics, status model) and validates; `pyyaml`/`openapi-spec-validator` added to `requirements.txt`. |
-| H-09 | Med | `CryptoMarket.jsx` = 1,169 lines | ✅ | Split into 12 focused modules under `frontend/src/pages/crypto/` (widgets, table, drawer, formatters, `useWatchlist`); orchestrator reduced to 423 lines. |
-| M-01 | Med | Inline ~330-line ABI fallback; monolithic `app.py` | ⚠️ | ABI loading is now **artifact-only, fail-fast** (inline ABI deleted). **Deferred:** splitting `app.py` itself (still a single module) — tracked as future work. |
-| M-02 / M-02c | Med | `/bond/all` N+1 RPC; no on-chain batch view | ✅ | `getBondsRange(start, count)` batch view added to `BondTrading`; `/bond/all` uses it (one RPC for the batch). |
-| M-03 | Med | Proxy-blind, endpoint-blind rate limiting | ✅ | Proxy-aware `_client_ip()` (honours `X-Forwarded-For` only when `TRUST_PROXY=true`), limiter applies to GET endpoints too, `Retry-After` header on 429. |
-| M-04 | Med | Uncached RSS + hardcoded fake news fallback | ✅ | Feed cached 15 min; on failure returns an **empty list with `source: "unavailable"`** — no more fake items presented as live. |
-| M-05 | Med | Zero frontend tests, no ESLint | ⚠️ | **Vitest + Testing Library added: 15 tests** (`npm test` — formatters, API service mapping, Header). **Deferred:** ESLint config. |
-| M-06 | Med | Env-fragile import chain (tests only ran with `.env`) | ✅ | `config.py` no longer raises at import; `api/__init__.py` lazy (PEP 562); the 42-test suite is hermetic (no `.env`, no live node — verified with and without a node on 8545). |
-| M-07 | Med | README truncated mid-`curl`; rate semantics inconsistent | ✅ | README completed (all endpoints, auth, bps, testing, local-dev scripts); `interestRate` is basis points end-to-end (API validates 0–10000; form collects % and sends bps; detail/dashboard render `5.00% (500 bps)`). |
-| M-08 | Med | Dockerfile not production-grade; compose `DEBUG=true` | ✅ | `api/Dockerfile`: gunicorn, non-root user, healthcheck. `docker-compose.yml` **deleted** (dev path is the `.sh`/`.bat` scripts + Hardhat node); its `DEBUG=true`/fallback-token issues vanished with it. |
-| M-09 | Med | One-off debug scripts committed | ✅ | `fix.ps1`, `fix_spins.js/.py`, `check_lines.js`, `inspect.js`, screenshot — deleted from tree and untracked. |
-| M-10 | Med | Truffle (EOL) unpinned; no root scripts | ✅ | Migrated to **Hardhat 3.13.0** + `@nomicfoundation/hardhat-toolbox-viem` (pinned in `package.json` with `build`/`test`/`node`/`deploy` scripts); migration ported to `scripts/deploy.js`; Truffle fully uninstalled (npx cache + npm cacache scrubbed). |
-| M-11 | Med | Validator deps missing; rate semantics inconsistent | ✅ | Deps added (see H-08); bps semantics unified (see M-07). |
-| L-01 | Low | Duplicate `w3`/`contract` declarations | ✅ | Single declaration site. |
-| L-02 | Low | `console.log` in `App.jsx`; `err.stack` rendered in page | ✅ | Both removed; crash page shows a generic message, full error goes to the browser console only. |
-| L-03 | Low | Rate limiter's `remaining` never surfaced | ✅ | Surfaced via the `Retry-After` header on 429 responses. |
-| L-04 | Low | Unrelated `duckhunt-bonds.html` in `frontend/public/` | ✅ | Deleted (decision: not part of the product). |
-| L-05 | Low | Audit report deleted in working tree | ✅ | Restored (this document). |
-| L-06 | Low | Stray `node_modules/adm-zip` in parent folder | ⛔ | Outside the repository — left on disk; safe to delete manually. |
-| L-07 | Low | Mixed-language UI ("Operações") | ✅ | Renamed to "Operations"; asserted by the Header test. |
-| L-08 | Low | Ineffective `.gitignore` entries; over-redacting log regex | ✅ | Files untracked (C-03), rules extended; redaction regex now targets actual secrets (hex keys, bearer tokens, checksummed addresses) instead of any 20+ char word. |
-| L-09 | Low | Swagger UI inlined in `app.py`; manual `Bearer ` prefix | ✅ | Docs externalized to `api/templates/docs.html` (served at `/docs`); spec at `/openapi.yaml`. |
-| I-01 | Info | Single-pool token (no per-bond instrument) | ℹ️ | Unchanged — accepted MVP design, documented. |
-| I-02 | Info | Vite proxy / env-driven setup | ℹ️ | Unchanged; token-in-bundle caveat documented (see H-04). |
-| I-03 | Info | Dev scripts; `.bat` hard-kills ports 8545/5000/3000 | ℹ️ | Documented in README "Local Development"; the hard-kill behaviour is a known, accepted

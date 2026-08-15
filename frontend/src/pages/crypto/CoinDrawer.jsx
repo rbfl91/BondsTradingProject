@@ -1,6 +1,6 @@
 import React from 'react'
 import {
-  Card, Drawer, Table, Row, Col, Space, Button, Alert, Spin, Tag, Typography, Image,
+  Card, Drawer, Row, Col, Space, Button, Alert, Spin, Tag, Typography, Image,
 } from 'antd'
 import { ShareAltOutlined, BarChartOutlined, ExperimentOutlined } from '@ant-design/icons'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'

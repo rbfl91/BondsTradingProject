@@ -15,7 +15,6 @@ import {
 import {
   DollarOutlined,
   TeamOutlined,
-  ClockCircleOutlined,
   SyncOutlined,
   BookOutlined,
 } from '@ant-design/icons'
@@ -221,7 +220,7 @@ const Dashboard = () => {
           </ResponsiveContainer>
         ) : (
           <div style={{ textAlign: 'center', padding: 40, color: '#8c8c8c' }}>
-            No bonds issued yet. Go to "Bond Operations" to issue your first bond.
+            No bonds issued yet. Go to “Bond Operations” to issue your first bond.
           </div>
         )}
       </Card>

@@ -4,7 +4,6 @@ import {
   Descriptions,
   Table,
   Tag,
-  Space,
   Button,
   Spin,
   Alert,
@@ -28,7 +27,7 @@ import dayjs from 'dayjs'
 // M-10 FIX: Configurable block explorer URL (defaults to Etherscan for mainnet)
 const BLOCK_EXPLORER = import.meta.env.VITE_BLOCK_EXPLORER || 'https://etherscan.io'
 
-const { Title, Text, Paragraph } = Typography
+const { Title, Paragraph } = Typography
 
 const BondDetail = () => {
   const { bondId } = useParams()
@@ -116,9 +115,8 @@ const BondDetail = () => {
   const daysUntilMaturity = maturityDate.diff(dayjs(), 'day')
   const isMatured = daysUntilMaturity <= 0
 
-  // Total interest calculation — interestRate is stored in BASIS POINTS
-  // (500 = 5.00%), so divide by 10000 to get a fraction
-  const totalInterest = bond.faceValue * (bond.interestRate / 10000) * (daysUntilMaturity > 0 ? daysUntilMaturity / 365 : 0)
+  // H-02: bookkeeping-only model — the interest rate is displayed (bps) but
+  // there is no accrual/payout engine, so no interest figure is computed.
 
   return (
     <div className="page-container">
@@ -266,7 +264,7 @@ const BondDetail = () => {
           />
         ) : (
           <div style={{ textAlign: 'center', padding: 24, color: '#8c8c8c' }}>
-            No holders found. Click "Refresh Holders" to load.
+            No holders found. Click “Refresh Holders” to load.
           </div>
         )}
       </Card>

@@ -1,10 +1,12 @@
 import axios from 'axios';
+import { getAuthToken, markUnauthorized } from '../auth';
 
 // API base URL — configurable via Vite env
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
-// H-08 NOTE: VITE_API_TOKEN is embedded in the client bundle at build time.
-//            This is acceptable for dev-only apps; for production, use a backend proxy.
-const API_TOKEN = import.meta.env.VITE_API_TOKEN || '';
+// H-04 FIX: no static token is embedded in the bundle anymore. The bearer
+// token is injected server-side (Vite dev proxy / production reverse proxy),
+// or, when the API is reached directly, by the operator at runtime via the
+// AuthGate (stored in localStorage, see src/auth.js).
 
 // Create axios instance with default config
 const apiClient = axios.create({
@@ -15,11 +17,13 @@ const apiClient = axios.create({
   },
 });
 
-// Request interceptor to add auth token
+// Request interceptor to add auth token (H-04: operator token from src/auth.js;
+// in dev/prod the proxy usually already injects it server-side)
 apiClient.interceptors.request.use(
   (config) => {
-    if (API_TOKEN) {
-      config.headers.Authorization = `Bearer ${API_TOKEN}`;
+    const token = getAuthToken();
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
   },
@@ -31,7 +35,8 @@ apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // L-06 FIX: removed console.error — handled by calling component
+      // H-04: ask the UI (AuthGate) to prompt for the operator token.
+      markUnauthorized();
     }
     return Promise.reject(error);
   }

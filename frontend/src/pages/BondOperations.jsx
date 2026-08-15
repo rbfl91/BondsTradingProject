@@ -9,23 +9,20 @@ import {
   Select,
   message,
   DatePicker,
-  Space,
   Alert,
   Typography,
   Result,
-  Spin,
 } from 'antd'
 import {
   PlusOutlined,
   ShoppingCartOutlined,
   SwapOutlined,
   ReloadOutlined,
-  CheckCircleOutlined,
 } from '@ant-design/icons'
 import bondAPI from '../services/api'
 import dayjs from 'dayjs'
 
-const { Title, Text, Paragraph } = Typography
+const { Title, Paragraph } = Typography
 
 const BondOperations = () => {
   const [activeTab, setActiveTab] = useState('issue')
@@ -40,7 +37,7 @@ const BondOperations = () => {
     try {
       const data = await bondAPI.getAllBonds()
       setBonds(data.bonds || [])
-    } catch (err) {
+    } catch {
       // Silently fail — dropdown will just be empty
     }
   }
@@ -149,7 +146,6 @@ const BondOperations = () => {
           form={form}
           loading={loading}
           onSubmit={handleSubmit}
-          error={error}
         />
       ),
     },
@@ -161,7 +157,6 @@ const BondOperations = () => {
           form={form}
           loading={loading}
           onSubmit={handleSubmit}
-          error={error}
           bonds={bondOptions}
         />
       ),
@@ -174,7 +169,6 @@ const BondOperations = () => {
           form={form}
           loading={loading}
           onSubmit={handleSubmit}
-          error={error}
           bonds={bondOptions}
         />
       ),
@@ -187,7 +181,6 @@ const BondOperations = () => {
           form={form}
           loading={loading}
           onSubmit={handleSubmit}
-          error={error}
           bonds={bondOptions}
         />
       ),
@@ -221,7 +214,7 @@ const BondOperations = () => {
 }
 
 // ============ Issue Bond Form ============
-const IssueBondForm = ({ form, loading, onSubmit, error }) => (
+const IssueBondForm = ({ form, loading, onSubmit }) => (
   <Form
     form={form}
     layout="vertical"
@@ -321,7 +314,7 @@ const IssueBondForm = ({ form, loading, onSubmit, error }) => (
 )
 
 // ============ Purchase Bond Form ============
-const PurchaseBondForm = ({ form, loading, onSubmit, error, bonds }) => (
+const PurchaseBondForm = ({ form, loading, onSubmit, bonds }) => (
   <Form
     form={form}
     layout="vertical"
@@ -369,7 +362,7 @@ const PurchaseBondForm = ({ form, loading, onSubmit, error, bonds }) => (
 )
 
 // ============ Sell Bond Form ============
-const SellBondForm = ({ form, loading, onSubmit, error, bonds }) => (
+const SellBondForm = ({ form, loading, onSubmit, bonds }) => (
   <Form
     form={form}
     layout="vertical"
@@ -434,7 +427,7 @@ const SellBondForm = ({ form, loading, onSubmit, error, bonds }) => (
 )
 
 // ============ Redeem Bond Form ============
-const RedeemBondForm = ({ form, loading, onSubmit, error, bonds }) => (
+const RedeemBondForm = ({ form, loading, onSubmit, bonds }) => (
   <Form
     form={form}
     layout="vertical"
