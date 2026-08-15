@@ -1,0 +1,5 @@
+# Development/test dependencies for the API (CI installs this file).
+# The hermetic API test suite needs pytest, which is NOT a production
+# dependency of the Flask app itself (see requirements.txt).
+-r requirements.txt
+pytest==8.3.5
