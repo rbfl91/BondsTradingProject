@@ -80,7 +80,7 @@ By signing, approvers confirm review of residual risks and acceptance of the gat
 ## Addendum A — Post-Certificate Remediation (2026-08-15)
 
 Per §9, the gate-residual findings below were closed after this certificate.
-Bound to commit `f6952b4` (supersedes the §4/§5 residual list for the
+Bound to commit `d07c122` (supersedes the §4/§5 residual list for the
 items listed here; §3 validation evidence remains as of `74349dd`).
 
 | Item | Gate | Action taken | Evidence |
@@ -97,5 +97,5 @@ items listed here; §3 validation evidence remains as of `74349dd`).
 - Frontend: **22/22 tests pass** (15 prior + 7 new `auth.test.js`) and **lint green** (0 errors; 2 advisory `react-hooks/exhaustive-deps` warnings by design) — run 2026-08-15.
 - OpenAPI: **valid** (`python api/validate_openapi.py`) after `ApiStatusResponse` extension — run 2026-08-15.
 - Contracts: unchanged since `74349dd` (no contract edits in this pass) — prior 25/25 evidence stands.
-- **API suite (42 tests): NOT yet re-run** against `f6952b4` (deferred at owner’s request until all fixes landed). The only API change is the additive `GET /status.economic_model` field; re-run is the sole open re-validation item before sign-off.
+- **API suite (42 tests): NOT yet re-run** against `d07c122` (deferred at owner’s request until all fixes landed). The only API change is the additive `GET /status.economic_model` field; re-run is the sole open re-validation item before sign-off.
 - Full CI (`.github/workflows/ci.yml`) covers all of the above on the next push.
