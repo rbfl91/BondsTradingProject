@@ -1,4 +1,8 @@
 @echo off
+REM NOTE: The contract-address extraction below parses legacy Truffle
+REM artifacts (build/contracts/*.json, network "5777"). With the Hardhat
+REM toolchain, run `migrate.bat` (npx hardhat build + scripts/deploy.js)
+REM and copy the printed CONTRACT_ADDRESS into .env instead.
 echo.
 echo ==================================================
 echo  Starting Bond Trading Development Environment
@@ -38,16 +42,17 @@ for /f "tokens=5" %%a in ('netstat -aon ^| findstr :3000 ^| findstr LISTENING') 
 timeout /t 2 /nobreak >nul
 
 echo.
-echo Starting Ganache blockchain server...
+echo Starting Hardhat blockchain server...
 echo.
 
-REM Start Ganache in a new window
-start "Ganache" cmd /k "ganache --port 8545 --networkId 5777 --gasLimit 8000000 --accounts 10 --defaultBalanceEther 100"
+REM Start the Hardhat node in a new window (deterministic test accounts,
+REM account #0 is the owner; port 8545 matches .env.example)
+start "Hardhat Node" cmd /k "npx hardhat node --port 8545"
 
 timeout /t 5 /nobreak >nul
 
 echo.
-echo Deploying smart contracts to Ganache...
+echo Deploying smart contracts to the local node...
 echo.
 
 call "%ROOT%migrate.bat"
@@ -57,7 +62,7 @@ echo Extracting deployed contract address and owner...
 for /f "usebackq tokens=*" %%A in (`node -e "const f=require('./build/contracts/BondTrading.json'); const id='5777'; if(!f.networks||!f.networks[id]){console.error('No network 5777 deployment found'); process.exit(1);} console.log(f.networks[id].address);"`) do set CONTRACT_ADDRESS=%%A
 for /f "usebackq tokens=*" %%A in (`node -e "const f=require('./build/contracts/BondToken.json'); const id='5777'; if(!f.networks||!f.networks[id]){console.error('No network 5777 deployment found'); process.exit(1);} console.log(f.networks[id].address);"`) do set TOKEN_ADDRESS=%%A
 
-REM owner is the first account (accounts[0]) used by truffle migrate
+REM owner is the first account (accounts[0]) of the local node
 for /f "usebackq tokens=*" %%A in (`powershell -Command "(Invoke-RestMethod -Uri 'http://127.0.0.1:8545' -Method Post -ContentType 'application/json' -Body '{\"jsonrpc\":\"2.0\",\"method\":\"eth_accounts\",\"params\":[],\"id\":1}').result[0]"`) do set OWNER_ADDRESS=%%A
 
 if not defined CONTRACT_ADDRESS (
@@ -101,7 +106,7 @@ echo.
 echo ==================================================
 echo  Development environment started!
 echo.
-echo Ganache  - running on port 8545  (new window)
+echo Hardhat  - running on port 8545  (new window)
 echo API      - running on port 5000  (new window)
 echo Frontend - running on port 3000  (new window)
 echo.

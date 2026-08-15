@@ -19,11 +19,13 @@ venv/
 # Optional stylelint cache
 .stylelintcache
 
-# Output directory
+# Build outputs (legacy Truffle + Vite)
 /build
-/contracts/**/*.json
-/test/**/*.js
-/migrations/**/*.js
+/frontend/dist
+
+# Hardhat
+/artifacts
+/cache
 
 # Logs
 logs
@@ -50,9 +52,6 @@ Thumbs.db
 ~*
 *.tmp
 
-# Truffle
-truffle-config.js
-
 # Debug / utility artifacts (L-09)
 fix_spins.*
 inspect.js
@@ -63,3 +62,6 @@ broswerConsolerIssues.jpg
 # IDE / build artifacts
 *.code-workspace
 .env.bak
+
+# Frontend dependencies
+/frontend/node_modules

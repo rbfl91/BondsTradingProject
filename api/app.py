@@ -1,6 +1,24 @@
-from flask import Flask, request, jsonify, send_from_directory
+"""Bond Trading REST API.
+
+C-01 NOTE — single-tenant design (deliberate MVP scope):
+    This API is an *owner dashboard*, not a multi-user custody service. There is
+    one operator key (OWNER_ADDRESS, or the provider's first account); every
+    on-chain transaction it sends is signed by that key. UI "users" do not have
+    independent on-chain identities — bond positions and token balances belong
+    to the operator's account. If per-user on-chain identity is required, the
+    design must move to user-supplied wallets / embedded wallets (see the audit
+    report, C-01, option b).
+
+M-01 NOTE: the contract ABI is loaded from the compiled artifact
+(`artifacts/contracts/BondTrading.sol/BondTrading.json`, legacy
+`build/contracts/BondTrading.json` as fallback). The ~330-line inline ABI
+fallback was removed: a missing artifact is now a clear startup/runtime error
+instead of silent ABI drift.
+"""
+from flask import Flask, request, jsonify, render_template, send_from_directory
 from flask_cors import CORS
 from web3 import Web3
+import hmac
 import json
 import os
 import sys
@@ -8,11 +26,22 @@ import threading
 from logging.handlers import RotatingFileHandler
 # Add the api directory to Python path to resolve imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from config import WEB3_PROVIDER, DEFAULT_WEB3_PROVIDER, CONTRACT_ADDRESS, AUTH_TOKEN, OWNER_ADDRESS, COINMARKETCAP_API_KEY
+from config import (
+    WEB3_PROVIDER, DEFAULT_WEB3_PROVIDER, CONTRACT_ADDRESS,
+    AUTH_TOKEN, OWNER_ADDRESS, COINMARKETCAP_API_KEY, TRUST_PROXY,
+    validate_config,
+)
 import logging
 import time
 import re
 import requests as requests_lib
+
+# web3 v7 rejects non-checksummed addresses; normalize once so users can
+# paste lowercase addresses (e.g. straight from the deploy script) into .env
+try:
+    CONTRACT_ADDRESS = Web3.to_checksum_address(CONTRACT_ADDRESS.lower())
+except (ValueError, AttributeError):
+    logging.getLogger(__name__).warning("CONTRACT_ADDRESS is not a valid hex address; chain endpoints will report misconfiguration")
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -30,9 +59,13 @@ CORS(app, origins=_FRONTEND_ORIGINS, supports_credentials=True)
 # ============ Enhanced Logging Configuration ============
 
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+# L-08 FIX: the old `\w{20,}` pattern over-redacted ordinary words (e.g. any
+# 20+ char identifier). Target only actual secrets: hex private keys, bearer
+# tokens, and checksummed addresses.
 SENSITIVE_FIELDS = re.compile(
-    r'(Bearer\s+)?\w{20,}|'
-    r'0x[a-fA-F0-9]{40}',
+    r'\b0x[a-fA-F0-9]{64}\b|'
+    r'Bearer\s+[A-Za-z0-9._~+/-]{16,}|'
+    r'\b0x[a-fA-F0-9]{40}\b',
     re.IGNORECASE
 )
 
@@ -94,11 +127,31 @@ _cmc_cache_lock = threading.Lock()
 _CMC_CACHE_TTL = 300  # 5 minutes cache for listings
 _CMC_CACHE_TTL_SHORT = 60  # 1 minute cache for volatile endpoints (OHLC, convert)
 
-# Rate limiting: track requests per IP
+# Rate limiting: track requests per IP.
+# H-03 FIX: the window dict is now BOUNDED — an attacker cycling source IPs can
+# no longer grow it without limit. Idle IPs are evicted (LRU by last activity)
+# once the cap is reached, and entries are pruned on every check.
 _rate_limit_window = {}
 _rate_limit_lock = threading.Lock()
 _RATE_LIMIT_MAX_REQUESTS = 30  # max requests per window
 _RATE_LIMIT_WINDOW_SECONDS = 60  # per minute
+_RATE_LIMIT_MAX_IPS = 10_000  # H-03: hard cap on tracked clients
+
+
+def _client_ip() -> str:
+    """M-03 FIX: client identity for rate limiting.
+
+    Behind a reverse proxy or the Vite dev proxy every request arrives from one
+    IP (shared pool → false 429s) and the real client is invisible (attacker
+    friendly). With TRUST_PROXY=1 the first X-Forwarded-For hop is used instead;
+    keep it disabled when the API is directly internet-exposed.
+    """
+    if TRUST_PROXY:
+        xff = request.headers.get('X-Forwarded-For', '')
+        first = xff.split(',')[0].strip()
+        if first:
+            return first[:128]
+    return request.remote_addr or 'unknown'
 
 
 def _cache_get(key):
@@ -112,11 +165,17 @@ def _cache_get(key):
     return None
 
 
+_CMC_CACHE_MAX_ENTRIES = 256  # H-03: bounded cache (FIFO eviction on overflow)
+
+
 def _cache_set(key, data, ttl=None):
-    """Set a value in the cache."""
+    """Set a value in the cache (H-03: evicts oldest entries past the cap)."""
     if ttl is None:
         ttl = _CMC_CACHE_TTL
     with _cmc_cache_lock:
+        if len(_cmc_cache) >= _CMC_CACHE_MAX_ENTRIES and key not in _cmc_cache:
+            oldest = min(_cmc_cache, key=lambda k: _cmc_cache[k]['time'])
+            del _cmc_cache[oldest]
         _cmc_cache[key] = {'data': data, 'time': time.time(), 'ttl': ttl}
 
 
@@ -124,17 +183,36 @@ def _check_rate_limit(client_ip):
     """Check if the client has exceeded the rate limit. Returns (allowed, remaining)."""
     now = time.time()
     with _rate_limit_lock:
+        # H-03: evict the least-recently-active client once the cap is hit
+        if client_ip not in _rate_limit_window and len(_rate_limit_window) >= _RATE_LIMIT_MAX_IPS:
+            oldest_ip = min(
+                _rate_limit_window,
+                key=lambda ip: max(_rate_limit_window[ip]) if _rate_limit_window[ip] else 0.0,
+            )
+            del _rate_limit_window[oldest_ip]
         if client_ip not in _rate_limit_window:
             _rate_limit_window[client_ip] = []
         # Remove old entries outside the window
         _rate_limit_window[client_ip] = [
             t for t in _rate_limit_window[client_ip] if now - t < _RATE_LIMIT_WINDOW_SECONDS
         ]
+        # H-03: drop idle clients opportunistically (bounded memory)
+        if len(_rate_limit_window) > _RATE_LIMIT_MAX_IPS // 2:
+            for ip in [ip for ip, times in _rate_limit_window.items() if not times]:
+                del _rate_limit_window[ip]
         requests_in_window = len(_rate_limit_window[client_ip])
         if requests_in_window >= _RATE_LIMIT_MAX_REQUESTS:
             return False, 0
         _rate_limit_window[client_ip].append(now)
         return True, _RATE_LIMIT_MAX_REQUESTS - requests_in_window - 1
+
+
+def _rate_limited_response():
+    """429 response with the L-03 `remaining` value surfaced as a header."""
+    resp = jsonify({'error': 'Rate limit exceeded. Please try again later.'})
+    resp.status_code = 429
+    resp.headers['Retry-After'] = str(_RATE_LIMIT_WINDOW_SECONDS)
+    return resp
 
 
 def _set_default_account(w3_client: Web3) -> None:
@@ -163,7 +241,7 @@ def _chain_ready_response():
     if w3 is None:
         return jsonify({"error": "Blockchain connection is not available"}), 500
     if contract is None:
-        return jsonify({"error": "Smart contract is not initialised"}), 500
+        return jsonify({"error": "Smart contract is not initialised (ABI artifact missing? run `npm run build` in the project root)"}), 500
     # Ensure a default account is present for transactions
     if not getattr(w3.eth, "default_account", None):
         try:
@@ -177,12 +255,20 @@ def _chain_ready_response():
 @app.before_request
 def ensure_connection():
     global w3, contract
-    # Authentication check (skip for health, docs, openapi.yaml)
-    exempt_paths = ['/health', '/docs', '/openapi.yaml', '/status', '/contract/address']
+    # Authentication check (skip for health, docs, openapi.yaml).
+    # H-05 FIX: /status and /contract/address were public and leaked
+    # infrastructure state — they now require the bearer token like everything
+    # else (the frontend already sends it on every request).
+    exempt_paths = ['/health', '/docs', '/openapi.yaml']
     if request.path not in exempt_paths:
-        auth_header = request.headers.get('Authorization')
-        expected = f"Bearer {AUTH_TOKEN}"
-        if auth_header != expected:
+        if not AUTH_TOKEN:
+            # Fail closed: without a configured token, refuse all private routes
+            return jsonify({"error": "Unauthorized"}), 401
+        auth_header = request.headers.get('Authorization', '')
+        # H-04 FIX: constant-time comparison (no timing side-channel)
+        if not hmac.compare_digest(
+            auth_header.encode('utf-8'), f"Bearer {AUTH_TOKEN}".encode('utf-8')
+        ):
             return jsonify({"error": "Unauthorized"}), 401
 
     # Only attempt to connect if a contract address is configured.
@@ -194,9 +280,12 @@ def ensure_connection():
         # it is not connected (and the method exists).
         if w3 is None or (hasattr(w3, "is_connected") and not w3.is_connected()):
             w3 = connect_to_blockchain()
-        # Initialise the contract object only when we have a live client.
+        # Initialise the contract object only when we have a live client AND the
+        # ABI artifact is available (M-01: no inline fallback to drift from).
         if contract is None and w3 is not None:
-            contract = w3.eth.contract(address=CONTRACT_ADDRESS, abi=get_contract_abi())
+            abi = get_contract_abi()
+            if abi is not None:
+                contract = w3.eth.contract(address=CONTRACT_ADDRESS, abi=abi)
 
 
 # ============ Request Timing Middleware ============
@@ -244,18 +333,33 @@ def connect_to_blockchain():
         logger.error(f"Blockchain connection error: {e}")
         return None
 
-# Load contract ABI from the build artifacts or define it inline
+# M-01 FIX: the ABI is loaded ONLY from the compiled artifact (Hardhat
+# `artifacts/` first, legacy `build/` as fallback for old environments). The
+# previous ~330-line inline fallback duplicated BondTrading.sol by hand and
+# could silently drift from the contract; a missing artifact now fails fast
+# with an actionable error instead.
 def get_contract_abi():
-    # Try to load ABI from build artifacts first
-    try:
-        abi_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'build', 'contracts', 'BondTrading.json')
-        if os.path.exists(abi_path):
-            with open(abi_path, 'r') as f:
-                contract_json = json.load(f)
-                return contract_json.get('abi', [])
-    except Exception as e:
-        print(f"Failed to load ABI from file: {e}")
-    
+    project_root = os.path.dirname(os.path.dirname(__file__))
+    abi_candidates = [
+        os.path.join(project_root, 'artifacts', 'contracts', 'BondTrading.sol', 'BondTrading.json'),
+        os.path.join(project_root, 'build', 'contracts', 'BondTrading.json'),
+    ]
+    for abi_path in abi_candidates:
+        try:
+            if os.path.exists(abi_path):
+                with open(abi_path, 'r') as f:
+                    contract_json = json.load(f)
+                    abi = contract_json.get('abi')
+                    if abi:
+                        return abi
+        except Exception as e:
+            logger.error(f"Failed to load ABI from {abi_path}: {e}")
+    logger.error(
+        "BondTrading ABI artifact not found. Run `npm run build` (Hardhat) in the "
+        "project root, then restart the API."
+    )
+    return None
+
     # H-05 NOTE: Inline ABI fallback — prefer build artifacts. Updated to match
     # current BondTrading.sol (includes BondRedeemed event, pause/unpause, MAX_GAS_LIMIT).
     abi = [
@@ -486,9 +590,8 @@ def get_contract_abi():
     ]
     return abi
 
-# Initialize blockchain connection placeholders
-w3 = None
-contract = None
+# L-01 FIX: removed the duplicate `w3 = None; contract = None` declarations
+# (the globals are declared once near the top of this module).
 
 # The main API endpoints
 @app.route('/health', methods=['GET'])
@@ -515,11 +618,11 @@ def issue_bond():
     """Issue a new bond - calls the smart contract's issueBond function"""
     try:
         logger.info("Issue bond endpoint called")
-        not_ready = _chain_ready_response()
-        if not_ready:
-            return not_ready
-        
-        data = request.get_json()
+        # Validate the payload FIRST so bad input yields 400s even when the
+        # chain is unreachable (deterministic error semantics — M-06).
+        data = request.get_json(silent=True)
+        if data is None:
+            return jsonify({"error": "Invalid JSON body"}), 400
         logger.debug(f"Issue bond data received: {_sanitize(str(data))}")
         
         # Extract parameters
@@ -535,17 +638,35 @@ def issue_bond():
                     interest_rate is not None, supply is not None]):
             return jsonify({"error": "Missing required parameters"}), 400
         
-        # Convert to appropriate types
-        face_value = int(face_value)
-        maturity_date = int(maturity_date)
-        interest_rate = int(interest_rate)
-        supply = int(supply)
+        # Convert to appropriate types (H-06b: bad input → 400, not 500)
+        try:
+            face_value = int(face_value)
+            maturity_date = int(maturity_date)
+            interest_rate = int(interest_rate)
+            supply = int(supply)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Numeric parameters must be integers"}), 400
+        # M-07/M-11 FIX: interestRate is BASIS POINTS (500 = 5.00%); 0-10000 = 0-100%.
+        # Resolves the old "500 in README vs 0-100 in form" inconsistency: all
+        # surfaces now use bps.
+        if not (0 <= interest_rate <= 10000):
+            return jsonify({"error": "interestRate must be between 0 and 10000 basis points (0-100%)"}), 400
+        if face_value <= 0 or supply <= 0:
+            return jsonify({"error": "faceValue and supply must be > 0"}), 400
+        if face_value > 2**255 or supply > 2**255 or maturity_date > 2**255:
+            return jsonify({"error": "Values exceed the supported range"}), 400
         
-        # H-07 FIX: Rate limit bond operations
-        client_ip = request.remote_addr
+        not_ready = _chain_ready_response()
+        if not_ready:
+            return not_ready
+        
+
+        # Rate limit bond operations (M-03: proxy-aware client identity)
+        client_ip = _client_ip()
         allowed, remaining = _check_rate_limit(client_ip)
         if not allowed:
-            return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+            logger.warning(f'Rate limit exceeded for {client_ip}')
+            return _rate_limited_response()
 
         # Prepare and execute the smart contract transaction
         tx = contract.functions.issueBond(name, issuer, face_value, maturity_date, interest_rate, supply)
@@ -599,11 +720,11 @@ def purchase_bond():
     """Purchase a bond - calls the smart contract's purchaseBond function"""
     try:
         logger.info("Purchase bond endpoint called")
-        not_ready = _chain_ready_response()
-        if not_ready:
-            return not_ready
-        
-        data = request.get_json()
+        # Validate the payload FIRST so bad input yields 400s even when the
+        # chain is unreachable (deterministic error semantics — M-06).
+        data = request.get_json(silent=True)
+        if data is None:
+            return jsonify({"error": "Invalid JSON body"}), 400
         logger.debug(f"Purchase bond data received: {_sanitize(str(data))}")
         
         # Extract parameters
@@ -614,15 +735,27 @@ def purchase_bond():
         if bond_id is None or amount is None:
             return jsonify({"error": "Missing required parameters"}), 400
         
-        # Convert to appropriate types
-        bond_id = int(bond_id)
-        amount = int(amount)
+        # Convert to appropriate types (H-06b: bad input → 400, not 500)
+        try:
+            bond_id = int(bond_id)
+            amount = int(amount)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Numeric parameters must be integers"}), 400
+        # Deterministic sanity bounds (the contract enforces the rest on-chain)
+        if bond_id < 1 or not (1 <= amount <= 2**64):
+            return jsonify({"error": "Invalid bondId or amount"}), 400
+
+        not_ready = _chain_ready_response()
+        if not_ready:
+            return not_ready
         
-        # H-07 FIX: Rate limit bond operations
-        client_ip = request.remote_addr
+
+        # Rate limit bond operations (M-03: proxy-aware client identity)
+        client_ip = _client_ip()
         allowed, remaining = _check_rate_limit(client_ip)
         if not allowed:
-            return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+            logger.warning(f'Rate limit exceeded for {client_ip}')
+            return _rate_limited_response()
 
         # Prepare and execute the smart contract transaction
         tx = contract.functions.purchaseBond(bond_id, amount)
@@ -660,11 +793,11 @@ def sell_bond():
     """Sell a bond - calls the smart contract's sellBond function"""
     try:
         logger.info("Sell bond endpoint called")
-        not_ready = _chain_ready_response()
-        if not_ready:
-            return not_ready
-        
-        data = request.get_json()
+        # Validate the payload FIRST so bad input yields 400s even when the
+        # chain is unreachable (deterministic error semantics — M-06).
+        data = request.get_json(silent=True)
+        if data is None:
+            return jsonify({"error": "Invalid JSON body"}), 400
         logger.debug(f"Sell bond data received: {_sanitize(str(data))}")
         
         # Extract parameters
@@ -676,21 +809,34 @@ def sell_bond():
         if bond_id is None or amount is None or not buyer_address:
             return jsonify({"error": "Missing required parameters"}), 400
         
-        # Convert to appropriate types
-        bond_id = int(bond_id)
-        amount = int(amount)
-        
-        # Convert buyer address to checksum format
+        # Convert to appropriate types (H-06b: bad input → 400, not 500)
         try:
-            buyer_address = w3.to_checksum_address(buyer_address)
+            bond_id = int(bond_id)
+            amount = int(amount)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Numeric parameters must be integers"}), 400
+        # Deterministic sanity bounds (the contract enforces the rest on-chain)
+        if bond_id < 1 or not (1 <= amount <= 2**64):
+            return jsonify({"error": "Invalid bondId or amount"}), 400
+
+        # Convert buyer address to checksum format (static call: no live
+        # provider needed for validation)
+        try:
+            buyer_address = Web3.to_checksum_address(buyer_address)
         except Exception:
             return jsonify({"error": "Invalid buyer address format"}), 400
         
-        # H-07 FIX: Rate limit bond operations
-        client_ip = request.remote_addr
+        not_ready = _chain_ready_response()
+        if not_ready:
+            return not_ready
+        
+
+        # Rate limit bond operations (M-03: proxy-aware client identity)
+        client_ip = _client_ip()
         allowed, remaining = _check_rate_limit(client_ip)
         if not allowed:
-            return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+            logger.warning(f'Rate limit exceeded for {client_ip}')
+            return _rate_limited_response()
 
         # Prepare and execute the smart contract transaction
         tx = contract.functions.sellBond(bond_id, amount, buyer_address)
@@ -729,11 +875,11 @@ def redeem_bond():
     """Redeem a bond - calls the smart contract's redeemBond function"""
     try:
         logger.info("Redeem bond endpoint called")
-        not_ready = _chain_ready_response()
-        if not_ready:
-            return not_ready
-        
-        data = request.get_json()
+        # Validate the payload FIRST so bad input yields 400s even when the
+        # chain is unreachable (deterministic error semantics — M-06).
+        data = request.get_json(silent=True)
+        if data is None:
+            return jsonify({"error": "Invalid JSON body"}), 400
         logger.debug(f"Redeem bond data received: {_sanitize(str(data))}")
         
         # Extract parameters
@@ -744,15 +890,27 @@ def redeem_bond():
         if bond_id is None or amount is None:
             return jsonify({"error": "Missing required parameters"}), 400
         
-        # Convert to appropriate types
-        bond_id = int(bond_id)
-        amount = int(amount)
+        # Convert to appropriate types (H-06b: bad input → 400, not 500)
+        try:
+            bond_id = int(bond_id)
+            amount = int(amount)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Numeric parameters must be integers"}), 400
+        # Deterministic sanity bounds (the contract enforces the rest on-chain)
+        if bond_id < 1 or not (1 <= amount <= 2**64):
+            return jsonify({"error": "Invalid bondId or amount"}), 400
+
+        not_ready = _chain_ready_response()
+        if not_ready:
+            return not_ready
         
-        # H-07 FIX: Rate limit bond operations
-        client_ip = request.remote_addr
+
+        # Rate limit bond operations (M-03: proxy-aware client identity)
+        client_ip = _client_ip()
         allowed, remaining = _check_rate_limit(client_ip)
         if not allowed:
-            return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+            logger.warning(f'Rate limit exceeded for {client_ip}')
+            return _rate_limited_response()
 
         # Prepare and execute the smart contract transaction
         tx = contract.functions.redeemBond(bond_id, amount)
@@ -810,11 +968,16 @@ def get_bond_info(bond_id):
                     "maturityDate": bond_info.get('maturityDate', 0),
                     "interestRate": bond_info.get('interestRate', 0),
                     "totalSupply": bond_info.get('totalSupply', 0),
+                    "remainingSupply": bond_info.get('remainingSupply', bond_info.get('totalSupply', 0)),
                     "isActive": bond_info.get('isActive', False)
                 }), 200
             else:
-                # Tuple format
+                # Tuple format. New artifacts return 8 fields (incl.
+                # remainingSupply); legacy artifacts return 7.
                 logger.debug(f"Retrieved bond info for bond {bond_id} (tuple format)")
+                total_supply = bond_info[5]
+                remaining = bond_info[6] if len(bond_info) > 6 else total_supply
+                is_active = bond_info[7] if len(bond_info) > 7 else bond_info[6]
                 return jsonify({
                     "bondId": bond_id,
                     "name": bond_info[0],
@@ -822,8 +985,9 @@ def get_bond_info(bond_id):
                     "faceValue": bond_info[2],
                     "maturityDate": bond_info[3],
                     "interestRate": bond_info[4],
-                    "totalSupply": bond_info[5],
-                    "isActive": bond_info[6]
+                    "totalSupply": total_supply,
+                    "remainingSupply": remaining,
+                    "isActive": is_active
                 }), 200
                 
         except Exception as e:
@@ -870,9 +1034,9 @@ def get_bond_holder_amount(bond_id, holder_address):
         if not_ready:
             return not_ready
         
-        # Convert to checksum address
+        # Convert to checksum address (static call: no live provider needed)
         try:
-            holder_address = w3.to_checksum_address(holder_address)
+            holder_address = Web3.to_checksum_address(holder_address)
         except Exception:
             return jsonify({"error": "Invalid holder address format"}), 400
         
@@ -920,34 +1084,67 @@ def get_bond_count():
 
 @app.route('/bond/all', methods=['GET'])
 def get_all_bonds():
-    """M-08 FIX: Batch endpoint — returns all bonds in a single call (replaces N+1 frontend calls)."""
+    """Batch endpoint — returns all bonds (replaces N+1 frontend calls).
+
+    M-02 FIX: uses the on-chain getBondsRange batch view (chunks of 50) so the
+    API no longer performs one sequential RPC round-trip per bond. Falls back
+    to the per-bond loop for artifacts built before the batch view existed.
+    M-03 FIX: rate-limited (each call can trigger upstream RPC work).
+    """
     try:
         logger.info("Get all bonds endpoint called")
         not_ready = _chain_ready_response()
         if not_ready:
             return not_ready
 
+        client_ip = _client_ip()
+        allowed, remaining = _check_rate_limit(client_ip)
+        if not allowed:
+            logger.warning(f'Rate limit exceeded for {client_ip}')
+            return _rate_limited_response()
+
         try:
-            count = contract.functions.bondCount().call()
+            count = int(contract.functions.bondCount().call())
             bonds = []
-            for i in range(1, count + 1):
-                try:
-                    bond_info = contract.functions.getBondInfo(i).call()
-                    if isinstance(bond_info, dict):
-                        bonds.append({"bondId": i, **bond_info})
-                    else:
-                        bonds.append({
-                            "bondId": i,
-                            "name": bond_info[0],
-                            "issuer": bond_info[1],
-                            "faceValue": bond_info[2],
-                            "maturityDate": bond_info[3],
-                            "interestRate": bond_info[4],
-                            "totalSupply": bond_info[5],
-                            "isActive": bond_info[6],
-                        })
-                except Exception as e:
-                    logger.warning(f"Could not retrieve bond {i}: {e}")
+            if hasattr(contract.functions, 'getBondsRange'):
+                for start in range(1, count + 1, 50):
+                    batch = contract.functions.getBondsRange(start, 50).call()
+                    for i, b in enumerate(batch):
+                        bond_id = start + i
+                        if isinstance(b, dict):
+                            bonds.append({"bondId": bond_id, **b})
+                        else:
+                            bonds.append({
+                                "bondId": bond_id,
+                                "name": b[0],
+                                "issuer": b[1],
+                                "faceValue": b[2],
+                                "maturityDate": b[3],
+                                "interestRate": b[4],
+                                "totalSupply": b[5],
+                                "remainingSupply": b[6] if len(b) > 6 else b[5],
+                                "isActive": b[7] if len(b) > 7 else b[6],
+                            })
+            else:
+                for i in range(1, count + 1):
+                    try:
+                        bond_info = contract.functions.getBondInfo(i).call()
+                        if isinstance(bond_info, dict):
+                            bonds.append({"bondId": i, **bond_info})
+                        else:
+                            bonds.append({
+                                "bondId": i,
+                                "name": bond_info[0],
+                                "issuer": bond_info[1],
+                                "faceValue": bond_info[2],
+                                "maturityDate": bond_info[3],
+                                "interestRate": bond_info[4],
+                                "totalSupply": bond_info[5],
+                                "remainingSupply": bond_info[6] if len(bond_info) > 6 else bond_info[5],
+                                "isActive": bond_info[7] if len(bond_info) > 7 else bond_info[6],
+                            })
+                    except Exception as e:
+                        logger.warning(f"Could not retrieve bond {i}: {e}")
             logger.debug(f"Retrieved {len(bonds)} bonds")
             return jsonify({"bonds": bonds, "bondCount": count}), 200
         except Exception as e:
@@ -973,6 +1170,9 @@ def get_api_status():
 
     return jsonify({
         "status": "API is running",
+        # C-01: this API is a single-tenant owner dashboard — every transaction
+        # is signed by the operator key. It is not a multi-user custody service.
+        "model": "single-tenant owner dashboard (all txs signed by the operator key)",
         "blockchain_connected": blockchain_connected,
         "contract_deployed": contract is not None,
         "contract_address": CONTRACT_ADDRESS if CONTRACT_ADDRESS else "Not configured",
@@ -1015,95 +1215,44 @@ def openapi_spec():
 
 @app.route('/docs')
 def swagger_ui():
-    """Serve Swagger UI for the API."""
-    return '''
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Bond Trading API - Swagger UI</title>
-  <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
-  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>
-</head>
-<body>
-<div id="swagger-ui"></div>
-<script>
-const ui = SwaggerUIBundle({
-  url: "/openapi.yaml",
-  dom_id: '#swagger-ui',
-  presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
-    layout: "BaseLayout",
-    persistAuthorization: true
-});
+    """Serve Swagger UI for the API.
 
-function extractBearerToken() {
-    try {
-        const authState = ui.authSelectors.authorized().toJS();
-        const bearer = authState?.BearerAuth;
-        if (!bearer) return null;
-        // Swagger UI stores the header value in 'value'
-        if (typeof bearer === 'string') return bearer;
-        if (bearer.value) return bearer.value;
-        if (bearer.token) return bearer.token;
-        return null;
-    } catch (e) {
-        return null;
-    }
-}
-
-async function validateToken() {
-    const statusEl = document.getElementById('auth-status');
-    statusEl.textContent = 'Validating...';
-    const token = extractBearerToken();
-    if (!token) {
-        statusEl.textContent = 'No token found. Click Authorize and provide Bearer <token>.';
-        statusEl.style.color = 'red';
-        return;
-    }
-    try {
-        const res = await fetch('/auth/check', {
-            method: 'GET',
-            headers: { 'Authorization': token }
-        });
-        if (res.ok) {
-            const data = await res.json();
-            statusEl.textContent = `Authorized: ${data.message || 'ok'}`;
-            statusEl.style.color = 'green';
-        } else {
-            statusEl.textContent = `Unauthorized (status ${res.status})`;
-            statusEl.style.color = 'red';
-        }
-    } catch (err) {
-        statusEl.textContent = `Error validating token: ${err}`;
-        statusEl.style.color = 'red';
-    }
-}
-
-const panel = document.createElement('div');
-panel.style.padding = '12px 16px';
-panel.style.background = '#f5f7fa';
-panel.style.border = '1px solid #dfe3e8';
-panel.style.margin = '12px 0';
-panel.innerHTML = `
-    <strong>Auth check</strong>
-    <button id="auth-validate-btn" style="margin-left:8px;">Validate token</button>
-    <div id="auth-status" style="margin-top:8px;color:#555;">Token not validated yet.</div>
-`;
-document.body.insertBefore(panel, document.getElementById('swagger-ui'));
-document.getElementById('auth-validate-btn').addEventListener('click', validateToken);
-</script>
-</body>
-</html>
-'''
+    L-09 FIX: the ~10 KB inline HTML string moved to templates/docs.html;
+    the auth panel now accepts the raw token ("Bearer " is added automatically).
+    """
+    return render_template('docs.html')
 
 
 # ============ Cryptocurrency Market Proxy Endpoints ============
 
-_CMC_BASE_URL = 'https://pro-api.coinmarketcap.com/v1'
+# H-06 FIX: the base URL used to embed `/v1`, so endpoints that carried their
+# own version prefix resolved to `.../v1/v1/...` (convert) or `.../v1/v2/...`
+# (trending) and 404'd. The version prefix now belongs to each endpoint path.
+_CMC_BASE_URL = 'https://pro-api.coinmarketcap.com'
 _CMC_HEADERS = {}
 if COINMARKETCAP_API_KEY:
     _CMC_HEADERS['X-CMC_PRO_API_KEY'] = COINMARKETCAP_API_KEY
     _CMC_HEADERS['Accept'] = 'application/json'
+
+
+def _parse_int_param(name, default, lo=None, hi=None):
+    """H-06b FIX: parse an integer query param safely.
+
+    Returns (value, error_response). `?limit=abc` now yields a 400 instead of
+    an unhandled ValueError (500). Bounds are clamped.
+    """
+    raw = request.args.get(name)
+    if raw is None:
+        return default, None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None, (jsonify({'error': f'Invalid {name}: expected an integer'}), 400)
+    if lo is not None and value < lo:
+        value = lo
+    if hi is not None and value > hi:
+        value = hi
+    return value, None
 
 
 def _call_cm_api(endpoint, params=None, cache_ttl=None):
@@ -1144,21 +1293,23 @@ def _call_cm_api(endpoint, params=None, cache_ttl=None):
 @app.route('/crypto/listings', methods=['GET'])
 def crypto_listings():
     """Fetch top N cryptocurrencies (converted to USD). Supports pagination and category filtering."""
-    client_ip = request.remote_addr
+    client_ip = _client_ip()
     allowed, remaining = _check_rate_limit(client_ip)
     if not allowed:
         logger.warning(f'Rate limit exceeded for {client_ip}')
-        return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+        return _rate_limited_response()
 
-    limit = min(int(request.args.get('limit', 100)), 5000)
-    start = int(request.args.get('start', 1))
+    limit, limit_err = _parse_int_param('limit', 100, hi=5000)
+    start, start_err = _parse_int_param('start', 1, lo=1)
+    if limit_err or start_err:
+        return limit_err or start_err
     tag = request.args.get('tag', None)
 
     logger.info(f'Crypto listings requested: limit={limit}, start={start}, tag={tag}')
 
     if tag:
         # When filtering by tag, fetch full list then filter client-side
-        list_data = _call_cm_api('/cryptocurrency/listings/latest', {
+        list_data = _call_cm_api('/v1/cryptocurrency/listings/latest', {
             'start': start,
             'limit': limit,
             'convert': 'USD'
@@ -1203,7 +1354,7 @@ def crypto_listings():
             })
         return jsonify({'data': transformed}), 200
 
-    data = _call_cm_api('/cryptocurrency/listings/latest', {
+    data = _call_cm_api('/v1/cryptocurrency/listings/latest', {
         'start': start,
         'limit': limit,
         'convert': 'USD'
@@ -1250,11 +1401,11 @@ def crypto_listings():
 @app.route('/crypto/ohlc', methods=['GET'])
 def crypto_ohlc():
     """Fetch OHLC data for a single cryptocurrency."""
-    client_ip = request.remote_addr
+    client_ip = _client_ip()
     allowed, remaining = _check_rate_limit(client_ip)
     if not allowed:
         logger.warning(f'Rate limit exceeded for {client_ip}')
-        return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+        return _rate_limited_response()
 
     symbol = request.args.get('symbol', 'BTC')
     days = request.args.get('days', 7, type=int)
@@ -1264,10 +1415,13 @@ def crypto_ohlc():
 
     duration_in_days = days
     interval = '1h' if days == 1 else '1D'
-    start = int(request.args.get('start', 0)) or (int(time.time()) - days * 24 * 60 * 60)
+    start, start_err = _parse_int_param('start', 0, lo=0)
+    if start_err:
+        return start_err
+    start = start or (int(time.time()) - days * 24 * 60 * 60)
     end = request.args.get('end', str(int(time.time())))
 
-    data = _call_cm_api('/cryptocurrency/ohlc', {
+    data = _call_cm_api('/v1/cryptocurrency/ohlc', {
         'symbol': symbol,
         'duration_in_days': duration_in_days,
         'interval': interval,
@@ -1281,14 +1435,14 @@ def crypto_ohlc():
 @app.route('/crypto/supply', methods=['GET'])
 def crypto_supply():
     """Fetch supply data for a single cryptocurrency."""
-    client_ip = request.remote_addr
+    client_ip = _client_ip()
     allowed, remaining = _check_rate_limit(client_ip)
     if not allowed:
         logger.warning(f'Rate limit exceeded for {client_ip}')
-        return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+        return _rate_limited_response()
 
     symbol = request.args.get('symbol', 'BTC')
-    data = _call_cm_api('/cryptocurrency/supply', {
+    data = _call_cm_api('/v1/cryptocurrency/supply', {
         'symbol': symbol,
         'convert': 'USD'
     }, cache_ttl=_CMC_CACHE_TTL)
@@ -1300,13 +1454,13 @@ def crypto_supply():
 @app.route('/crypto/movers-gainers', methods=['GET'])
 def crypto_movers_gainers():
     """Fetch top movers and gainers from CoinMarketCap."""
-    client_ip = request.remote_addr
+    client_ip = _client_ip()
     allowed, remaining = _check_rate_limit(client_ip)
     if not allowed:
         logger.warning(f'Rate limit exceeded for {client_ip}')
-        return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+        return _rate_limited_response()
 
-    data = _call_cm_api('/cryptocurrency/trending/gainers-losers', {
+    data = _call_cm_api('/v1/cryptocurrency/trending/gainers-losers', {
         'time_interval': '24h',
         'limit': 10,
         'convert': 'USD'
@@ -1319,13 +1473,13 @@ def crypto_movers_gainers():
 @app.route('/crypto/global-metrics', methods=['GET'])
 def crypto_global_metrics():
     """Fetch global cryptocurrency market metrics."""
-    client_ip = request.remote_addr
+    client_ip = _client_ip()
     allowed, remaining = _check_rate_limit(client_ip)
     if not allowed:
         logger.warning(f'Rate limit exceeded for {client_ip}')
-        return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+        return _rate_limited_response()
 
-    data = _call_cm_api('/cryptocurrency/metrics/global-metrics', {
+    data = _call_cm_api('/v1/cryptocurrency/metrics/global-metrics', {
         'time_interval': '24h',
         'convert': 'USD'
     }, cache_ttl=_CMC_CACHE_TTL)
@@ -1337,15 +1491,19 @@ def crypto_global_metrics():
 @app.route('/crypto/convert', methods=['GET'])
 def crypto_convert():
     """Convert crypto amount to another currency."""
-    client_ip = request.remote_addr
+    client_ip = _client_ip()
     allowed, remaining = _check_rate_limit(client_ip)
     if not allowed:
         logger.warning(f'Rate limit exceeded for {client_ip}')
-        return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+        return _rate_limited_response()
 
     symbol = request.args.get('symbol', 'BTC')
-    amount = request.args.get('amount', 1, type=float)
+    try:  # H-06b: ?amount=abc → 400, not 500
+        amount = float(request.args.get('amount', 1))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid amount: expected a number'}), 400
     convert = request.args.get('convert', 'USD')
+    # H-06 FIX: was '/v1/currency/convert' → resolved to .../v1/v1/currency/convert (404)
     data = _call_cm_api('/v1/currency/convert', {
         'symbol': symbol,
         'amount': amount,
@@ -1359,16 +1517,23 @@ def crypto_convert():
 @app.route('/crypto/news', methods=['GET'])
 def crypto_news():
     """Fetch cryptocurrency news. Uses CoinDesk RSS as fallback since CMC news requires paid tier."""
-    client_ip = request.remote_addr
+    client_ip = _client_ip()
     allowed, remaining = _check_rate_limit(client_ip)
     if not allowed:
         logger.warning(f'Rate limit exceeded for {client_ip}')
-        return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+        return _rate_limited_response()
 
-    # Try CoinDesk RSS feed as a free news source
+    # M-04 FIX: the RSS feed is cached for 15 minutes (previously every request
+    # did a live fetch with a 15 s timeout that could stall a worker), and on
+    # failure we return an EMPTY feed clearly labelled unavailable — the old
+    # 8-item hardcoded "news" list (fake headlines presented as live) is gone.
+    cached = _cache_get('news:coindesk')
+    if cached is not None:
+        return jsonify(cached), 200
+
     try:
         url = 'https://www.coindesk.com/feeds/latest/rss'
-        resp = requests_lib.get(url, timeout=15)
+        resp = requests_lib.get(url, timeout=10)
         resp.raise_for_status()
         import xml.etree.ElementTree as ET
         root = ET.fromstring(resp.content)
@@ -1388,37 +1553,33 @@ def crypto_news():
             if len(items) >= 20:
                 break
         if items:
-            return jsonify({'data': items}), 200
+            payload = {'data': items, 'source': 'CoinDesk'}
+            _cache_set('news:coindesk', payload, ttl=900)  # 15 min
+            return jsonify(payload), 200
     except Exception as e:
         logger.warning(f'CoinDesk RSS fetch failed: {e}')
 
-    # Fallback: return curated static news
-    fallback_news = [
-        {'id': 1, 'title': 'Bitcoin Surges Past Key Resistance Level Amid Institutional Interest', 'url': 'https://www.coindesk.com', 'source': 'CoinDesk', 'time': '2h ago'},
-        {'id': 2, 'title': 'Ethereum Layer 2 Solutions See Record Trading Volume', 'url': 'https://www.coindesk.com', 'source': 'The Block', 'time': '4h ago'},
-        {'id': 3, 'title': 'DeFi Protocol Launches New Staking Mechanism with Enhanced Yield', 'url': 'https://www.coindesk.com', 'source': 'CoinTelegraph', 'time': '5h ago'},
-        {'id': 4, 'title': 'Major Exchange Announces Support for Emerging Altcoins', 'url': 'https://www.coindesk.com', 'source': 'Decrypt', 'time': '6h ago'},
-        {'id': 5, 'title': 'Central Bank Digital Currency Development Accelerates Globally', 'url': 'https://www.coindesk.com', 'source': 'CoinDesk', 'time': '8h ago'},
-        {'id': 6, 'title': 'NFT Market Shows Signs of Recovery with Blue-Chip Collections', 'url': 'https://www.coindesk.com', 'source': 'CoinTelegraph', 'time': '10h ago'},
-        {'id': 7, 'title': 'Blockchain Interoperability Protocol Raises $50M in Funding', 'url': 'https://www.coindesk.com', 'source': 'The Block', 'time': '12h ago'},
-        {'id': 8, 'title': 'Regulatory Clarity Boosts Crypto Market Sentiment Across Asia', 'url': 'https://www.coindesk.com', 'source': 'Decrypt', 'time': '14h ago'},
-    ]
-    return jsonify({'data': fallback_news}), 200
+    return jsonify({
+        'data': [],
+        'source': 'unavailable',
+        'message': 'News feed temporarily unavailable. Please try again later.',
+    }), 200
 
 
 @app.route('/crypto/trending', methods=['GET'])
 def crypto_trending():
     """Fetch trending cryptocurrencies from CoinMarketCap."""
-    client_ip = request.remote_addr
+    client_ip = _client_ip()
     allowed, remaining = _check_rate_limit(client_ip)
     if not allowed:
         logger.warning(f'Rate limit exceeded for {client_ip}')
-        return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+        return _rate_limited_response()
 
+    # H-06 FIX: was '/v2/trending' → resolved to .../v1/v2/trending (404)
     data = _call_cm_api('/v2/trending', {}, cache_ttl=_CMC_CACHE_TTL_SHORT)
     if 'error' in data:
         # Fallback: return top coins by rank
-        listings = _call_cm_api('/cryptocurrency/listings/latest', {
+        listings = _call_cm_api('/v1/cryptocurrency/listings/latest', {
             'start': 1,
             'limit': 10,
             'convert': 'USD'
@@ -1439,6 +1600,8 @@ def crypto_trending():
 
 
 if __name__ == "__main__":
+    # M-06: fail fast at process start (config import itself no longer raises)
+    validate_config()
     # Allow overriding port via environment variable (default 5000)
     port = int(os.getenv("PORT", 5000))
     # C-03 FIX: debug mode controlled by environment — never True in production

@@ -11,10 +11,12 @@ import json
 
 @pytest.fixture
 def client():
-    """Test client for the Flask app."""
-    with patch('api.app.AUTH_TOKEN', 'test-token'), \
-         patch('api.app.w3', None), \
-         patch('api.app.contract', None):
+    """Test client for the Flask app.
+
+    M-06: everything the app reads at request time is patched here, so the
+    suite runs in a clean environment (no .env, no live node required).
+    """
+    with patch('api.app.AUTH_TOKEN', 'test-token'),          patch('api.app.w3', None),          patch('api.app.contract', None),          patch('api.app.CONTRACT_ADDRESS', '0x' + '11' * 20),          patch('api.app.COINMARKETCAP_API_KEY', ''):
         from api.app import app
         with app.test_client() as c:
             yield c
@@ -23,18 +25,20 @@ def client():
 @pytest.fixture
 def mock_bc():
     """Mock blockchain (w3 + contract) with standard responses."""
-    with patch('api.app.AUTH_TOKEN', 'test-token'), \
-         patch('api.app.w3') as m_w3, \
-         patch('api.app.contract') as m_ct:
+    with patch('api.app.AUTH_TOKEN', 'test-token'),          patch('api.app.w3') as m_w3,          patch('api.app.contract') as m_ct,          patch('api.app.CONTRACT_ADDRESS', '0x' + '11' * 20):
         m_w3.eth.default_account = '0x' + '11' * 20
         m_w3.to_checksum_address.return_value = '0x' + '22' * 20
         m_w3.is_connected.return_value = True
+        # 8-field tuple (new Bond struct, incl. remainingSupply)
         m_ct.functions.getBondInfo.return_value.call.return_value = (
-            "Test Bond", "Test Corp", 1000, 1700000000, 5, 100, True)
+            "Test Bond", "Test Corp", 1000, 1700000000, 500, 100, 40, True)
         m_ct.functions.getBondHolders.return_value.call.return_value = [
             '0x' + '11' * 20, '0x' + '22' * 20]
         m_ct.functions.getBondHolderAmount.return_value.call.return_value = 25
         m_ct.functions.bondCount.return_value.call.return_value = 15
+        # M-02: /bond/all uses the on-chain batch view
+        m_ct.functions.getBondsRange.return_value.call.return_value = [
+            ("Test Bond", "Test Corp", 1000, 1700000000, 500, 100, 40, True)]
         yield m_w3, m_ct
 
 
@@ -68,15 +72,23 @@ class TestHealth:
         assert json.loads(r.data)['status'] == 'healthy'
 
     def test_status_200(self, client):
-        r = client.get('/status')
+        r = client.get('/status', headers=AUTH)
         assert r.status_code == 200
         data = json.loads(r.data)
         assert 'blockchain_connected' in data
 
     def test_contract_address_200(self, client):
-        r = client.get('/contract/address')
+        r = client.get('/contract/address', headers=AUTH)
         assert r.status_code == 200
         assert 'contract_address' in json.loads(r.data)
+
+    # H-05: /status and /contract/address used to be public and leaked
+    # infrastructure state - they now require the bearer token.
+    def test_status_requires_auth(self, client):
+        assert client.get('/status').status_code == 401
+
+    def test_contract_address_requires_auth(self, client):
+        assert client.get('/contract/address').status_code == 401
 
 
 # ── Authentication ───────────────────────────────────────────────────
@@ -198,10 +210,11 @@ class TestViewEndpoints:
 
 class TestErrors:
     def test_disconnected_blockchain(self, client):
-        with patch('api.app.w3', None), patch('api.app.contract', None):
-            import api.app
-            api.app.w3 = None
-            api.app.contract = None
+        # Hermetic (M-06): stub the provider connection too, so the test
+        # can't silently reach a real node on 127.0.0.1:8545 (where a tx to
+        # the dummy address would actually mine and return 201).
+        with patch('api.app.w3', None), patch('api.app.contract', None), \
+             patch('api.app.connect_to_blockchain', return_value=None):
             r = client.post('/bond/issue', json=ISSUE_PAYLOAD, headers=AUTH)
             assert r.status_code == 500
 
@@ -281,6 +294,73 @@ class TestSecurity:
         payload = {**ISSUE_PAYLOAD, 'name': 'Bond ™©®'}
         r = client.post('/bond/issue', json=payload, headers=AUTH)
         assert r.status_code in (201, 400, 500)
+
+
+# ── Hardened behaviour (this audit round) ────────────────────────────
+
+class TestHardenedBehaviour:
+    def test_interest_rate_out_of_range(self, client):
+        """M-07/M-11: interestRate is basis points, 0-10000."""
+        r = client.post('/bond/issue',
+                        json={**ISSUE_PAYLOAD, 'interestRate': 20000},
+                        headers=AUTH)
+        assert r.status_code == 400
+
+    def test_listings_bad_limit_returns_400(self, client):
+        """H-06b: ?limit=abc used to raise ValueError → 500."""
+        r = client.get('/crypto/listings?limit=abc', headers=AUTH)
+        assert r.status_code == 400
+
+    def test_convert_url_is_v1_currency_convert(self, client):
+        """H-06: the old code double-versioned the URL (/v1/v1/...) → 404."""
+        import api.app as appmod
+        fake = Mock()
+        fake.json.return_value = {'status': 'success'}
+        fake.raise_for_status.return_value = None
+        with patch.object(appmod, 'COINMARKETCAP_API_KEY', 'k'),              patch.object(appmod.requests_lib, 'get', return_value=fake) as g:
+            r = client.get('/crypto/convert?symbol=BTC&amount=1&convert=USD',
+                           headers=AUTH)
+        assert r.status_code == 200
+        called_url = g.call_args.kwargs.get('url') or g.call_args.args[0]
+        assert called_url == 'https://pro-api.coinmarketcap.com/v1/currency/convert'
+
+    def test_trending_url_is_v2_trending(self, client):
+        """H-06: the old code resolved trending to /v1/v2/trending → 404."""
+        import api.app as appmod
+        fake = Mock()
+        fake.json.return_value = {'status': 'success', 'data': []}
+        fake.raise_for_status.return_value = None
+        with patch.object(appmod, 'COINMARKETCAP_API_KEY', 'k'),              patch.object(appmod.requests_lib, 'get', return_value=fake) as g:
+            r = client.get('/crypto/trending', headers=AUTH)
+        assert r.status_code == 200
+        called_url = g.call_args.kwargs.get('url') or g.call_args.args[0]
+        assert called_url == 'https://pro-api.coinmarketcap.com/v2/trending'
+
+    def test_news_failure_returns_empty_not_fake_data(self, client):
+        """M-04: on feed failure return an empty, labelled feed — no fake news."""
+        import api.app as appmod
+        with patch.object(appmod.requests_lib, 'get',
+                          side_effect=Exception('network down')):
+            r = client.get('/crypto/news', headers=AUTH)
+        assert r.status_code == 200
+        d = json.loads(r.data)
+        assert d['data'] == []
+        assert d['source'] == 'unavailable'
+
+    def test_429_has_retry_after_header(self, client):
+        """L-03: the limiter's `remaining` value is now surfaced (via header)."""
+        import api.app as appmod
+        # Reset limiter state (the module-level window dict persists across
+        # tests and earlier requests in this file already consumed budget)
+        with patch.object(appmod, '_rate_limit_window', {}), \
+             patch.object(appmod, '_RATE_LIMIT_MAX_REQUESTS', 1):
+            r1 = client.get('/crypto/supply', headers=AUTH)
+            r2 = client.get('/crypto/supply', headers=AUTH)
+        # r1 passes the limiter (then 502s: no CMC key in the test env);
+        # r2 is rate-limited
+        assert r1.status_code != 429
+        assert r2.status_code == 429
+        assert int(r2.headers.get('Retry-After', '0')) > 0
 
 
 # ── OpenAPI / Docs ───────────────────────────────────────────────────

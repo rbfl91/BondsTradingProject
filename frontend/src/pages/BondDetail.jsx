@@ -116,8 +116,9 @@ const BondDetail = () => {
   const daysUntilMaturity = maturityDate.diff(dayjs(), 'day')
   const isMatured = daysUntilMaturity <= 0
 
-  // Total interest calculation
-  const totalInterest = bond.faceValue * (bond.interestRate / 100) * (daysUntilMaturity > 0 ? daysUntilMaturity / 365 : 0)
+  // Total interest calculation — interestRate is stored in BASIS POINTS
+  // (500 = 5.00%), so divide by 10000 to get a fraction
+  const totalInterest = bond.faceValue * (bond.interestRate / 10000) * (daysUntilMaturity > 0 ? daysUntilMaturity / 365 : 0)
 
   return (
     <div className="page-container">
@@ -202,7 +203,7 @@ const BondDetail = () => {
             ${bond.faceValue.toLocaleString()}
           </Descriptions.Item>
           <Descriptions.Item label="Interest Rate" span={1}>
-            {bond.interestRate}%
+            {(bond.interestRate / 100).toFixed(2)}% ({bond.interestRate} bps)
           </Descriptions.Item>
           <Descriptions.Item label="Total Supply" span={1}>
             {bond.totalSupply.toLocaleString()}

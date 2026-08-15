@@ -239,6 +239,227 @@ paths:
                 properties:
                   bondCount:
                     type: integer
+  /bond/all:
+    get:
+      summary: Get ALL bonds in one call (batch view, replaces N sequential calls)
+      responses:
+        '401':
+          description: Missing or invalid token
+        '200':
+          description: All bonds returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetAllBondsResponse'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimitExceeded'
+        '500':
+          description: Server error
+  /crypto/listings:
+    get:
+      summary: Top cryptocurrencies (USD-converted)
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100, maximum: 5000 }
+        - name: start
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: tag
+          in: query
+          schema: { type: string }
+      responses:
+        '401':
+          description: Missing or invalid token
+        '400':
+          description: Invalid numeric query parameter
+        '200':
+          description: Crypto listings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CryptoUpstreamResponse'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimitExceeded'
+        '502':
+          description: Upstream CoinMarketCap error
+  /crypto/ohlc:
+    get:
+      summary: OHLC data for a single cryptocurrency
+      parameters:
+        - name: symbol
+          in: query
+          schema: { type: string, default: BTC }
+        - name: days
+          in: query
+          schema: { type: integer, default: 7, minimum: 1, maximum: 365 }
+        - name: start
+          in: query
+          schema: { type: integer }
+        - name: end
+          in: query
+          schema: { type: string }
+      responses:
+        '401':
+          description: Missing or invalid token
+        '400':
+          description: Invalid query parameter
+        '200':
+          description: OHLC data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CryptoUpstreamResponse'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimitExceeded'
+        '502':
+          description: Upstream CoinMarketCap error
+  /crypto/supply:
+    get:
+      summary: Supply data for a single cryptocurrency
+      parameters:
+        - name: symbol
+          in: query
+          schema: { type: string, default: BTC }
+      responses:
+        '401':
+          description: Missing or invalid token
+        '200':
+          description: Supply data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CryptoUpstreamResponse'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimitExceeded'
+        '502':
+          description: Upstream CoinMarketCap error
+  /crypto/movers-gainers:
+    get:
+      summary: Top movers and gainers (24h)
+      responses:
+        '401':
+          description: Missing or invalid token
+        '200':
+          description: Movers/gainers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CryptoUpstreamResponse'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimitExceeded'
+        '502':
+          description: Upstream CoinMarketCap error
+  /crypto/global-metrics:
+    get:
+      summary: Global market metrics
+      responses:
+        '401':
+          description: Missing or invalid token
+        '200':
+          description: Global metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CryptoUpstreamResponse'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimitExceeded'
+        '502':
+          description: Upstream CoinMarketCap error
+  /crypto/convert:
+    get:
+      summary: Convert a crypto amount to another currency
+      parameters:
+        - name: symbol
+          in: query
+          schema: { type: string, default: BTC }
+        - name: amount
+          in: query
+          schema: { type: number, default: 1 }
+        - name: convert
+          in: query
+          schema: { type: string, default: USD }
+      responses:
+        '401':
+          description: Missing or invalid token
+        '400':
+          description: Invalid numeric query parameter
+        '200':
+          description: Conversion result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CryptoUpstreamResponse'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimitExceeded'
+        '502':
+          description: Upstream CoinMarketCap error
+  /crypto/news:
+    get:
+      summary: Cryptocurrency news (CoinDesk RSS, cached 15 min; empty + source=unavailable on failure)
+      responses:
+        '401':
+          description: Missing or invalid token
+        '200':
+          description: News items
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CryptoNewsResponse'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimitExceeded'
+  /crypto/trending:
+    get:
+      summary: Trending cryptocurrencies
+      responses:
+        '401':
+          description: Missing or invalid token
+        '200':
+          description: Trending coins
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CryptoUpstreamResponse'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimitExceeded'
+        '502':
+          description: Upstream CoinMarketCap error
 components:
   securitySchemes:
     BearerAuth:
@@ -266,6 +487,9 @@ components:
           type: integer
         interestRate:
           type: integer
+          description: Interest rate in BASIS POINTS (500 = 5.00%). 0-10000.
+          minimum: 0
+          maximum: 10000
         supply:
           type: integer
       example:
@@ -273,7 +497,7 @@ components:
         issuer: "Acme Corp"
         faceValue: 1000
         maturityDate: 1735689600
-        interestRate: 5
+        interestRate: 500
         supply: 10000
     IssueBondResponse:
       type: object
@@ -389,17 +613,90 @@ components:
         message: "Bond redeemed successfully"
         bondId: 1
         amount: 10
-    GetBondInfoResponse:
+    BondView:
       type: object
       properties:
         bondId:
           type: integer
-        message:
+        name:
           type: string
-          example: Bond information retrieved successfully
+        issuer:
+          type: string
+        faceValue:
+          type: integer
+        maturityDate:
+          type: integer
+        interestRate:
+          type: integer
+          description: Basis points (500 = 5.00%)
+        totalSupply:
+          type: integer
+          description: Original issuance size
+        remainingSupply:
+          type: integer
+          description: Not yet purchased in the primary market
+        isActive:
+          type: boolean
       example:
         bondId: 1
-        message: "Bond information retrieved successfully"
+        name: "Corporate Bond"
+        issuer: "Acme Corp"
+        faceValue: 1000
+        maturityDate: 1735689600
+        interestRate: 500
+        totalSupply: 10000
+        remainingSupply: 9000
+        isActive: true
+    GetBondInfoResponse:
+      allOf:
+        - $ref: '#/components/schemas/BondView'
+    GetAllBondsResponse:
+      type: object
+      properties:
+        bonds:
+          type: array
+          items:
+            $ref: '#/components/schemas/BondView'
+        bondCount:
+          type: integer
+    CryptoUpstreamResponse:
+      type: object
+      description: Passthrough of the CoinMarketCap response (or an error object when the upstream call fails)
+      properties:
+        status:
+          type: string
+        data: {}
+        error:
+          type: string
+    CryptoNewsResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+              title:
+                type: string
+              url:
+                type: string
+              source:
+                type: string
+              time:
+                type: string
+        source:
+          type: string
+          description: 'CoinDesk when live; unavailable when the feed could not be fetched (data is then empty)'
+        message:
+          type: string
+    RateLimitExceeded:
+      type: object
+      properties:
+        error:
+          type: string
+          example: Rate limit exceeded. Please try again later.
     GetBondHoldersResponse:
       type: object
       properties:
@@ -439,6 +736,7 @@ components:
             type: string
       example:
         status: "API is running"
+        model: "single-tenant owner dashboard (all txs signed by the operator key)"
         blockchain_connected: true
         endpoints:
           - "/health"
@@ -447,7 +745,17 @@ components:
           - "/bond/purchase"
           - "/bond/sell"
           - "/bond/redeem"
+          - "/bond/count"
+          - "/bond/all"
           - "/bond/{bond_id}/info"
           - "/bond/{bond_id}/holders"
           - "/bond/{bond_id}/holder/{holder_address}/amount"
+          - "/crypto/listings"
+          - "/crypto/ohlc"
+          - "/crypto/supply"
+          - "/crypto/movers-gainers"
+          - "/crypto/global-metrics"
+          - "/crypto/convert"
+          - "/crypto/news"
+          - "/crypto/trending"
           - "/status"

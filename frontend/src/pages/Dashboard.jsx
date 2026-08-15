@@ -58,10 +58,11 @@ const Dashboard = () => {
       setBondCount(allBondsData.bondCount || bondsList.length)
 
       // Generate chart data from bond info
+      // interestRate arrives in basis points (500 = 5.00%); chart in percent
       const chartData = bondsList.map((bond) => ({
         name: bond.name,
         faceValue: bond.faceValue,
-        interestRate: bond.interestRate,
+        interestRate: (bond.interestRate || 0) / 100,
         supply: bond.totalSupply,
       }))
       setChartData(chartData)
@@ -84,9 +85,10 @@ const Dashboard = () => {
   // Calculate summary metrics
   const totalFaceValue = bonds.reduce((sum, b) => sum + (b.faceValue || 0), 0)
   const totalSupply = bonds.reduce((sum, b) => sum + (b.totalSupply || 0), 0)
+  // Avg. interest in percent (values arrive in basis points)
   const avgInterestRate =
     bonds.length > 0
-      ? bonds.reduce((sum, b) => sum + (b.interestRate || 0), 0) / bonds.length
+      ? bonds.reduce((sum, b) => sum + (b.interestRate || 0), 0) / bonds.length / 100
       : 0
 
   if (loading) {
@@ -250,7 +252,7 @@ const Dashboard = () => {
                 title: 'Interest Rate',
                 dataIndex: 'interestRate',
                 key: 'interestRate',
-                render: (val) => `${val}%`,
+                render: (val) => `${(val / 100).toFixed(2)}%`,
               },
               {
                 title: 'Supply',

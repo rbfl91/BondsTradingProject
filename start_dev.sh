@@ -19,7 +19,7 @@ for cmd in node python3 npm; do
   fi
 done
 
-# Step 2: Install root dependencies (OpenZeppelin)
+# Step 2: Install root dependencies (Hardhat + OpenZeppelin)
 if [ ! -d "node_modules" ]; then
   echo "[1/4] Installing root dependencies..."
   npm install
@@ -41,7 +41,7 @@ pip install -r api/requirements.txt --quiet
 
 # Step 5: Compile contracts
 echo "[4/4] Compiling smart contracts..."
-npx truffle compile
+npx hardhat build
 
 echo ""
 echo "========================================"
@@ -49,8 +49,8 @@ echo "  Setup complete!"
 echo "========================================"
 echo ""
 echo "Next steps:"
-echo "  1. Start Ganache:    ganache"
-echo "  2. Deploy contracts: npx truffle migrate"
+echo "  1. Start local node: npx hardhat node"
+echo "  2. Deploy contracts: npm run deploy     (needs PRIVATE_KEY on external nodes)"
 echo "  3. Start API:        cd api && source venv/bin/activate && python app.py"
 echo "  4. Start Frontend:   cd frontend && npm run dev"
 echo ""

@@ -59,9 +59,12 @@ const BondOperations = () => {
       switch (activeTab) {
         case 'issue':
           // M-09 FIX: Convert DatePicker value to Unix timestamp for the API
+          // M-07 FIX: the form collects a percent (0-100); the API/contract
+          // use basis points, so convert here (5.5% -> 550 bps)
           result = await bondAPI.issueBond({
             ...values,
             maturityDate: values.maturityDate?.unix(),
+            interestRate: Math.round(Number(values.interestRate) * 100),
           })
           break
         case 'purchase':
@@ -272,6 +275,7 @@ const IssueBondForm = ({ form, loading, onSubmit, error }) => (
     <Form.Item
       name="interestRate"
       label="Annual Interest Rate (%)"
+      extra="Stored on-chain in basis points: 5.5% is sent as 550 bps (500 = 5.00%)"
       rules={[
         { required: true, message: 'Please enter the interest rate' },
         { type: 'number', min: 0, max: 100, message: 'Rate must be between 0 and 100' },

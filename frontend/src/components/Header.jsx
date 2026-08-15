@@ -22,7 +22,7 @@ const Header = () => {
     {
       key: '/operations',
       icon: <TransactionOutlined />,
-      label: <Link to="/operations">Operações</Link>,
+      label: <Link to="/operations">Operations</Link>,
     },
     {
       key: '/crypto-market',

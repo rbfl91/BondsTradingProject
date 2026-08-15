@@ -11,7 +11,6 @@ import './App.css'
 const { Content } = Layout
 
 const App = () => {
-  console.log('App rendering...')
   return (
     <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Layout style={{ minHeight: '100vh' }}>

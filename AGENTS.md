@@ -4,8 +4,8 @@
 
 - **Frontend**: React + Vite + Ant Design (`frontend/`)
 - **API**: Flask REST API (`api/app.py`)
-- **Smart Contracts**: Solidity + Truffle (`contracts/`, `migrations/`, `test/`)
-- **Blockchain**: Web3 integration with local Ethereum node (Ganache/Hardhat on port 8545)
+- **Smart Contracts**: Solidity + Hardhat 3 (`contracts/`, `scripts/`, `test/`)
+- **Blockchain**: Web3 integration with local Ethereum node (Hardhat node on port 8545)
 
 ## Package Boundaries
 
@@ -14,22 +14,25 @@
 | `api/` | Flask REST API (port 5000) |
 | `frontend/` | React SPA (dev server port 3000) |
 | `contracts/` | Solidity contracts (BondToken, BondTrading) |
-| `migrations/` | Truffle deployment scripts |
-| `test/` | Truffle contract tests |
-| `build/` | Compiled contract artifacts (contains ABI) |
+| `scripts/` | Hardhat deployment scripts (`deploy.js`) |
+| `test/` | Hardhat 3 contract tests (node:test + viem, `*.test.js`) |
+| `artifacts/` | Hardhat compiled artifacts (contains ABI) |
 
 ## Commands
 
-### Smart Contracts
+### Smart Contracts (Hardhat 3)
 ```bash
 # Compile contracts
-truffle compile
+npm run build            # = npx hardhat build
 
-# Run tests
-truffle test
+# Run tests (built-in Hardhat network, no external node needed)
+npm test                # = npx hardhat test
 
-# Deploy to local network
-truffle migrate --network development
+# Start a local node on 8545
+npm run node            # = npx hardhat node
+
+# Deploy to local node (external network needs PRIVATE_KEY env var)
+npm run deploy          # = npx hardhat run scripts/deploy.js --network development
 ```
 
 ### API
@@ -53,12 +56,15 @@ cd frontend && npm run dev
 
 # Build
 cd frontend && npm run build
+
+# Tests (vitest)
+cd frontend && npm test
 ```
 
 ## Environment Setup
 
-1. **Blockchain**: Start local node (Ganache/Hardhat) on `http://127.0.0.1:8545`
-2. **Deploy contracts**: `truffle migrate --network development`
+1. **Blockchain**: Start local node (`npx hardhat node`) on `http://127.0.0.1:8545`
+2. **Deploy contracts**: `npm run deploy` (node must be running on 8545; set `PRIVATE_KEY` for external nodes)
 3. **Configure `.env`** (root):
    ```
    WEB3_PROVIDER=http://127.0.0.1:8545
@@ -73,7 +79,7 @@ cd frontend && npm run build
 1. Deploy `BondToken` first (ERC20 token for bond ownership)
 2. Deploy `BondTrading` with `BondToken` address as constructor argument
 
-Migration script at `migrations/2_deploy_contracts.js` handles both.
+Deployment script at `scripts/deploy.js` handles both.
 
 ## API Authentication
 
@@ -85,15 +91,20 @@ Migration script at `migrations/2_deploy_contracts.js` handles both.
 
 ### Contract Tests
 ```bash
-truffle test
-# Run specific test
-truffle test test/BondTradingTest.js
+npx hardhat test
+# Run a single file
+npx hardhat test test/BondTrading.test.js
 ```
 
 ### API Tests
 ```bash
 cd api
-pytest test_*.py
+python -m pytest test_api.py   # hermetic: no .env / live node required
+```
+
+### Frontend Tests
+```bash
+cd frontend && npm test
 ```
 
 ## Key Files
@@ -106,18 +117,24 @@ pytest test_*.py
 | `contracts/BondTrading.sol` | Bond operations contract |
 | `frontend/src/services/api.js` | API client with auth interceptors |
 | `frontend/vite.config.js` | Proxy config for `/api` → localhost:5000 |
+| `hardhat.config.js` | Hardhat 3 config (solidity 0.8.21, networks) |
+| `scripts/deploy.js` | Deployment script (replaces Truffle migration) |
 
 ## Data Flow
 
 1. Frontend → API (`/api/*` proxied to localhost:5000 via Vite)
 2. API → Smart Contract (via Web3 on port 8545)
-3. Bond ownership tracked via `BondToken` ERC20 balances
-4. `BondTrading` contract manages bond lifecycle (issue/purchase/sell/redeem)
+3. `purchaseBond` escrows `BondToken` ERC20s into the contract; `redeemBond`
+   burns them from that escrow at maturity; `sellBond` transfers the
+   position mapping only (no token transfer)
+4. `BondTrading` contract manages the bond lifecycle (issue/purchase/sell/redeem)
 
 ## Common Gotchas
 
-- **ABI Loading**: API loads ABI from `build/contracts/BondTrading.json` at runtime; rebuild contracts after changes
+- **ABI Loading**: API loads ABI from `artifacts/contracts/BondTrading.sol/BondTrading.json` (Hardhat) at runtime, falling back to legacy `build/contracts/BondTrading.json`; rebuild contracts after changes
 - **Default Account**: API sets `w3.eth.default_account` from `OWNER_ADDRESS` env or first provider account
 - **Port Conflicts**: API=5000, Frontend=3000, Blockchain=8545
-- **Contract Address**: Must be set in `.env` before API can interact with contracts
-- **Token Approval**: Users must `approve()` BondTrading contract to spend their tokens before purchasing bonds
+- **Contract Address**: Must be set in `.env` before API can interact with contracts (lowercase is fine — the API normalizes to checksum at startup)
+- **Token Approval**: Users must `approve()` the BondTrading contract to spend their tokens before purchasing bonds
+- **Interest Rate Semantics**: `interestRate` is in **basis points** everywhere (API validates 0–10000; 500 = 5.00%). The frontend form collects a percent and multiplies by 100 before sending
+- **Auth is fail-closed**: with no `AUTH_TOKEN` configured, every endpoint except `/health` (and docs routes) returns 401
