@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - run: npm ci
       - run: npm test # 25 tests, built-in Hardhat network (no external node)
 
@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - run: cd frontend && npm ci
       - run: cd frontend && npm run lint # M-05: ESLint gate
       - run: cd frontend && npm test # vitest suite

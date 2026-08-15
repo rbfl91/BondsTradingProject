@@ -360,6 +360,9 @@ def get_contract_abi():
     )
     return None
 
+
+# The main API endpoints
+@app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
     logger.info("Health check requested")
