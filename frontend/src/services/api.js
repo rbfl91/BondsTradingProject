@@ -11,7 +11,11 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 // Create axios instance with default config
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 30000,
+  // N-18 FIX: deliberately LONGER than the server-side CMC upstream timeout
+  // (30 s). At the old 30 s the client aborted exactly as a slow upstream
+  // call succeeded (then the cached result made a retry succeed — confusing
+  // UX). 40 s gives the server headroom while still bounding the wait.
+  timeout: 40000,
   headers: {
     'Content-Type': 'application/json',
   },

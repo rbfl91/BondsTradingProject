@@ -51,14 +51,19 @@ ISSUE_PAYLOAD = {
 
 
 def _mock_tx(m_w3, m_ct, func_name, *args):
-    """Helper: set up mock tx flow on a contract function."""
+    """Helper: set up mock tx flow on a contract function.
+
+    N-05: the API now polls `eth_getTransactionReceipt` with a bounded
+    deadline instead of `wait_for_transaction_receipt`, so the mock provides
+    the receipt on the first poll (immediate success, no sleep).
+    """
     mock_tx = Mock()
     mock_tx.estimate_gas.return_value = 100000
     mock_tx.transact.return_value = b'\x00' * 32
     mock_rx = Mock()
     mock_rx.status = 1
     mock_rx.logs = []
-    m_w3.eth.wait_for_transaction_receipt.return_value = mock_rx
+    m_w3.eth.get_transaction_receipt.return_value = mock_rx
     getattr(m_ct.functions, func_name).return_value = mock_tx
     return mock_tx, mock_rx
 
@@ -254,7 +259,8 @@ class TestTxFlow:
         mock_tx.estimate_gas.side_effect = lambda *a, **k: order.append('est') or 100000
         mock_tx.transact.side_effect = lambda *a, **k: order.append('tx') or b'\x00' * 32
         mock_rx = Mock(); mock_rx.status = 1; mock_rx.logs = []
-        m_w3.eth.wait_for_transaction_receipt.side_effect = lambda *a: order.append('wait') or mock_rx
+        # N-05: the bounded wait polls get_transaction_receipt
+        m_w3.eth.get_transaction_receipt.side_effect = lambda *a: order.append('wait') or mock_rx
         m_ct.functions.issueBond.return_value = mock_tx
         r = client.post('/bond/issue', json=ISSUE_PAYLOAD, headers=AUTH)
         assert r.status_code == 201
@@ -374,6 +380,193 @@ class TestOpenAPI:
         r = client.get('/docs')
         assert r.status_code == 200
         assert 'html' in r.content_type
+
+
+# ── 2026-08 audit round (N-xx) ────────────────────────────────────────────
+
+class TestStrictIntegerInputs:
+    """N-04: non-integral numeric inputs are rejected, not truncated."""
+
+    def test_float_amount_rejected_not_truncated(self, client):
+        # {"amount": 1.9} used to silently execute as 1 with a 200
+        r = client.post('/bond/purchase', json={'bondId': 1, 'amount': 1.9}, headers=AUTH)
+        assert r.status_code == 400
+
+    def test_float_face_value_rejected(self, client):
+        r = client.post('/bond/issue', json={**ISSUE_PAYLOAD, 'faceValue': 1000.9}, headers=AUTH)
+        assert r.status_code == 400
+
+    def test_float_maturity_date_rejected(self, client):
+        r = client.post('/bond/issue', json={**ISSUE_PAYLOAD, 'maturityDate': 1700000000.5}, headers=AUTH)
+        assert r.status_code == 400
+
+    def test_whole_valued_float_accepted(self, client, mock_bc):
+        # 10.0 == 10 — integral floats stay accepted
+        _mock_tx(*mock_bc, 'purchaseBond')
+        r = client.post('/bond/purchase', json={'bondId': 1, 'amount': 10.0}, headers=AUTH)
+        assert r.status_code == 200
+
+    def test_boolean_amount_rejected(self, client):
+        # True is an int subclass in Python — must not masquerade as 1
+        r = client.post('/bond/purchase', json={'bondId': 1, 'amount': True}, headers=AUTH)
+        assert r.status_code == 400
+
+
+class TestMetadataLengthCap:
+    """N-23: name/issuer strings are length-capped in the API."""
+
+    def test_name_too_long_rejected(self, client):
+        r = client.post('/bond/issue', json={**ISSUE_PAYLOAD, 'name': 'x' * 65}, headers=AUTH)
+        assert r.status_code == 400
+
+    def test_issuer_too_long_rejected(self, client):
+        r = client.post('/bond/issue', json={**ISSUE_PAYLOAD, 'issuer': 'y' * 65}, headers=AUTH)
+        assert r.status_code == 400
+
+    def test_max_length_name_accepted(self, client, mock_bc):
+        _mock_tx(*mock_bc, 'issueBond')
+        r = client.post('/bond/issue', json={**ISSUE_PAYLOAD, 'name': 'z' * 64}, headers=AUTH)
+        assert r.status_code == 201
+
+
+class TestReceiptTimeout:
+    """N-05: a never-mined tx returns 504 + tx_hash instead of stalling."""
+
+    def test_receipt_timeout_returns_504_with_tx_hash(self, client, mock_bc):
+        import api.app as appmod
+        m_w3, m_ct = mock_bc
+        mock_tx = Mock()
+        mock_tx.estimate_gas.return_value = 100000
+        mock_tx.transact.return_value = b'\x00' * 32
+        # Receipt never arrives — polling keeps failing until the deadline
+        m_w3.eth.get_transaction_receipt.side_effect = Exception('not mined yet')
+        m_ct.functions.purchaseBond.return_value = mock_tx
+        with patch.object(appmod, 'RECEIPT_TIMEOUT_SECONDS', 0.05), \
+             patch.object(appmod, 'RECEIPT_POLL_INTERVAL_SECONDS', 0.01):
+            r = client.post('/bond/purchase', json={'bondId': 1, 'amount': 10}, headers=AUTH)
+        assert r.status_code == 504
+        data = json.loads(r.data)
+        assert 'tx_hash' in data
+        assert 'Revert' not in data['error']  # generic message, no internals
+
+
+class TestConnectionProbeCache:
+    """N-06: probing is TTL-cached with exponential backoff on failure."""
+
+    def test_probe_cooldown_grows_on_failure_and_resets_on_success(self, client):
+        import api.app as appmod
+        # Fresh state
+        appmod._conn_state['checked_at'] = 0.0
+        appmod._conn_state['cooldown'] = appmod._CONN_PROBE_OK_TTL
+        assert appmod._chain_probe_due() is True
+        # A failed probe doubles the cooldown (capped)
+        appmod._mark_chain_probe(False)
+        assert appmod._conn_state['cooldown'] == 2 * appmod._CONN_PROBE_OK_TTL
+        appmod._mark_chain_probe(False)
+        assert appmod._conn_state['cooldown'] == 4 * appmod._CONN_PROBE_OK_TTL
+        # Simulate an old check → probe due again, then success resets the TTL
+        appmod._conn_state['checked_at'] = 0.0
+        assert appmod._chain_probe_due() is True
+        appmod._mark_chain_probe(True)
+        assert appmod._conn_state['cooldown'] == appmod._CONN_PROBE_OK_TTL
+        # Immediately after a probe the next request must NOT re-probe
+        assert appmod._chain_probe_due() is False
+
+
+class TestViewEndpointRateLimiting:
+    """N-10: the individual view endpoints no longer bypass the limiter."""
+
+    def test_bond_count_is_rate_limited(self, client, mock_bc):
+        import api.app as appmod
+        with patch.object(appmod, '_rate_limit_window', {}), \
+             patch.object(appmod, '_RATE_LIMIT_MAX_REQUESTS', 1):
+            r1 = client.get('/bond/count', headers=AUTH)
+            r2 = client.get('/bond/count', headers=AUTH)
+        assert r1.status_code == 200  # first request passes (bondCount is mocked)
+        assert r2.status_code == 429
+
+    def test_auth_check_is_rate_limited(self, client):
+        import api.app as appmod
+        with patch.object(appmod, '_rate_limit_window', {}), \
+             patch.object(appmod, '_RATE_LIMIT_MAX_REQUESTS', 1):
+            r1 = client.get('/auth/check', headers=AUTH)
+            r2 = client.get('/auth/check', headers=AUTH)
+        assert r1.status_code == 200
+        assert r2.status_code == 429
+
+
+class TestHoldersPaging:
+    """N-09: /bond/<id>/holders supports offset/limit paging."""
+
+    def test_paged_view_is_used_when_artifact_supports_it(self, client, mock_bc):
+        m_w3, m_ct = mock_bc
+        m_ct.functions.getBondHoldersRange.return_value.call.return_value = ['0x' + '33' * 20]
+        m_ct.functions.getBondHoldersCount.return_value.call.return_value = 7
+        r = client.get('/bond/1/holders?offset=2&limit=5', headers=AUTH)
+        assert r.status_code == 200
+        d = json.loads(r.data)
+        assert d['holders'] == ['0x' + '33' * 20]
+        assert d['total'] == 7
+        assert d['offset'] == 2
+        assert d['limit'] == 5
+        m_ct.functions.getBondHoldersRange.assert_called_once_with(1, 2, 5)
+
+    def test_no_params_returns_full_list_with_total(self, client, mock_bc):
+        r = client.get('/bond/1/holders', headers=AUTH)
+        assert r.status_code == 200
+        d = json.loads(r.data)
+        assert len(d['holders']) == 2  # the fixture's full list
+        assert d['total'] == 2
+        assert d['offset'] == 0
+        assert d['limit'] is None
+
+    def test_bad_limit_returns_400_even_without_chain(self, client):
+        # M-06 semantics: validation happens before chain contact
+        r = client.get('/bond/1/holders?limit=abc', headers=AUTH)
+        assert r.status_code == 400
+
+
+class TestListingsTagWindow:
+    """N-19: a tag filter fetches a wider upstream window."""
+
+    def test_tag_fetch_wider_window(self, client):
+        import api.app as appmod
+        fake = Mock()
+        fake.json.return_value = {'data': []}
+        fake.raise_for_status.return_value = None
+        with patch.object(appmod, 'COINMARKETCAP_API_KEY', 'k'), \
+             patch.object(appmod, '_cmc_cache', {}), \
+             patch.object(appmod.requests_lib, 'get', return_value=fake) as g:
+            r = client.get('/crypto/listings?limit=10&tag=payments', headers=AUTH)
+        assert r.status_code == 200
+        called = g.call_args.kwargs.get('params') or g.call_args.args[1]
+        # The upstream window is widened to at least 1000 despite limit=10;
+        # the tag itself is a client-side filter (never sent upstream)
+        assert called['limit'] == 1000
+        assert called['start'] == 1
+        assert 'tag' not in called
+
+    def test_no_tag_keeps_requested_limit(self, client):
+        import api.app as appmod
+        fake = Mock()
+        fake.json.return_value = {'data': []}
+        fake.raise_for_status.return_value = None
+        with patch.object(appmod, 'COINMARKETCAP_API_KEY', 'k'), \
+             patch.object(appmod, '_cmc_cache', {}), \
+             patch.object(appmod.requests_lib, 'get', return_value=fake) as g:
+            r = client.get('/crypto/listings?limit=25', headers=AUTH)
+        assert r.status_code == 200
+        called = g.call_args.kwargs.get('params') or g.call_args.args[1]
+        assert called['limit'] == 25
+
+
+class TestLogInjection:
+    """N-11: user-controlled values cannot forge log lines via newlines."""
+
+    def test_log_safe_neutralizes_newlines(self, client):
+        import api.app as appmod
+        assert appmod._log_safe('a\nb\r\nc\x00d') == 'a\\nb\\r\\ncd'
+        assert len(appmod._log_safe('x' * 500)) == 200
 
 
 if __name__ == '__main__':

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import {
   Card,
   Descriptions,
@@ -39,7 +39,7 @@ const BondDetail = () => {
   const [holders, setHolders] = useState([])
   const [holdersLoading, setHoldersLoading] = useState(false)
 
-  const fetchBondInfo = async () => {
+  const fetchBondInfo = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
@@ -50,7 +50,7 @@ const BondDetail = () => {
     } finally {
       setLoading(false)
     }
-  }
+  }, [bondId])
 
   const fetchHolders = async () => {
     setHoldersLoading(true)
@@ -73,7 +73,7 @@ const BondDetail = () => {
 
   useEffect(() => {
     fetchBondInfo()
-  }, [bondId])
+  }, [fetchBondInfo])
 
   if (loading) {
     return (

@@ -362,6 +362,104 @@ describe("BondTrading", () => {
     assert.equal(await trading.read.bondCount(), 2n);
   });
 
+  it("N-03: a PAUSED contract still allows redemption of matured bonds", async () => {
+    const { trading } = await networkHelpers.loadFixture(fixture);
+    const maturity = await issueTestBond(trading, ONE_HOUR);
+    await trading.write.purchaseBond([1n, 100n], { account: user1.account });
+
+    // Owner pauses AFTER the purchase — settlement must still be possible
+    await trading.write.pause([], { account: owner.account });
+    await networkHelpers.time.increaseTo(maturity + 1n);
+    await trading.write.redeemBond([1n, 100n], { account: user1.account });
+    assert.equal(await trading.read.getBondHolderAmount([1n, user1Addr]), 0n);
+  });
+
+  it("N-03: a DEACTIVATED matured bond can still be redeemed", async () => {
+    const { trading } = await networkHelpers.loadFixture(fixture);
+    const maturity = await issueTestBond(trading, ONE_HOUR);
+    await trading.write.purchaseBond([1n, 100n], { account: user1.account });
+
+    // Owner deactivates AFTER the purchase — holders must still settle
+    await trading.write.deactivateBond([1n], { account: owner.account });
+    assert.equal((await trading.read.getBondInfo([1n])).isActive, false);
+    await networkHelpers.time.increaseTo(maturity + 1n);
+    await trading.write.redeemBond([1n, 100n], { account: user1.account });
+    assert.equal(await trading.read.getBondHolderAmount([1n, user1Addr]), 0n);
+  });
+
+  it("N-03: pause/deactivate/maturity still block purchases", async () => {
+    const { trading } = await networkHelpers.loadFixture(fixture);
+    const maturity = await issueTestBond(trading, ONE_HOUR);
+
+    // Paused: the trading side is blocked (custom OZ error)
+    await trading.write.pause([], { account: owner.account });
+    await viem.assertions.revertWithCustomError(
+      trading.write.purchaseBond([1n, 10n], { account: user1.account }),
+      trading,
+      "EnforcedPause",
+    );
+    await trading.write.unpause([], { account: owner.account });
+
+    // Deactivated: "Bond is not active" fires before the maturity check
+    await trading.write.deactivateBond([1n], { account: owner.account });
+    await viem.assertions.revertWith(
+      trading.write.purchaseBond([1n, 10n], { account: user1.account }),
+      "Bond is not active",
+    );
+
+    // Re-activated but matured: the maturity gate applies
+    await trading.write.activateBond([1n], { account: owner.account });
+    await networkHelpers.time.increaseTo(maturity + 1n);
+    await viem.assertions.revertWith(
+      trading.write.purchaseBond([1n, 10n], { account: user1.account }),
+      "Bond has matured",
+    );
+  });
+
+  it("N-08: getBondsRange with a huge start returns [] instead of reverting", async () => {
+    const { trading } = await networkHelpers.loadFixture(fixture);
+    await issueTestBond(trading);
+    const hugeStart = 2n ** 256n - 1n;
+    const res = await trading.read.getBondsRange([hugeStart, 50n]);
+    assert.equal(res.length, 0);
+    // start beyond the last bond id (but not overflowing) also returns []
+    const res2 = await trading.read.getBondsRange([2n, 50n]);
+    assert.equal(res2.length, 0);
+  });
+
+  it("N-09: getBondHoldersRange pages the holder list", async () => {
+    const { trading } = await networkHelpers.loadFixture(fixture);
+    await issueTestBond(trading);
+    await trading.write.purchaseBond([1n, 100n], { account: user1.account });
+    await trading.write.purchaseBond([1n, 200n], { account: user2.account });
+
+    assert.equal(await trading.read.getBondHoldersCount([1n]), 2n);
+    const page = await trading.read.getBondHoldersRange([1n, 1n, 1n]);
+    assert.equal(page.length, 1);
+    assert.ok(isAddress(page[0], user2Addr)); // swap-pop order: user2 is last
+    const all = await trading.read.getBondHoldersRange([1n, 0n, 50n]);
+    assert.equal(all.length, 2);
+    // offset past the end / zero limit → empty
+    assert.equal((await trading.read.getBondHoldersRange([1n, 5n, 10n])).length, 0);
+    assert.equal((await trading.read.getBondHoldersRange([1n, 0n, 0n])).length, 0);
+  });
+
+  it("N-21: deploying with the zero token address reverts", async () => {
+    // Deploy reverts surface as a raw RPC error (no parsed reason), so assert
+    // on the throw itself rather than the revert message.
+    let threw = false;
+    try {
+      await viem.deployContract(
+        "BondTrading",
+        ["0x0000000000000000000000000000000000000000", ownerAddr],
+        { account: owner.account },
+      );
+    } catch {
+      threw = true;
+    }
+    assert.ok(threw, "deploy with the zero token address must revert");
+  });
+
   it("getBondsRange should return a batch of bonds (M-02c)", async () => {
     const { trading } = await networkHelpers.loadFixture(fixture);
     await issueTestBond(trading);

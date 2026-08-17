@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { Button, Typography, Spin, Alert, Row, Col } from 'antd'
 import {
   GlobalOutlined, SyncOutlined, WarningOutlined, CheckCircleOutlined,
@@ -62,7 +62,7 @@ const CryptoMarket = () => {
 
   // ── Data fetching ───────────────────────────────────────────────────
 
-  const fetchGlobalData = async () => {
+  const fetchGlobalData = useCallback(async () => {
     try {
       const statusRes = await cryptoAPI.getStatus()
       if (statusRes && statusRes.cmc_api_configured !== undefined) {
@@ -100,9 +100,9 @@ const CryptoMarket = () => {
     } catch {
       // Movers fetch failed — non-critical
     }
-  }
+  }, [])
 
-  const fetchNews = async () => {
+  const fetchNews = useCallback(async () => {
     setNewsLoading(true)
     try {
       const response = await cryptoAPI.getNews()
@@ -114,9 +114,9 @@ const CryptoMarket = () => {
     } finally {
       setNewsLoading(false)
     }
-  }
+  }, [])
 
-  const fetchTrending = async () => {
+  const fetchTrending = useCallback(async () => {
     try {
       const response = await cryptoAPI.getTrending()
       if (response.data && response.data.length > 0) {
@@ -125,9 +125,9 @@ const CryptoMarket = () => {
     } catch {
       // Trending fetch failed — non-critical
     }
-  }
+  }, [])
 
-  const fetchChartData = async (symbol, days = 7, crypto = null) => {
+  const fetchChartData = useCallback(async (symbol, days = 7, crypto = null) => {
     setChartLoading(true)
     try {
       const response = await cryptoAPI.getOHLC(symbol, days)
@@ -153,9 +153,9 @@ const CryptoMarket = () => {
     } finally {
       setChartLoading(false)
     }
-  }
+  }, [])
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setRefreshing(true)
     try {
       setError(null)
@@ -186,7 +186,7 @@ const CryptoMarket = () => {
       setLoading(false)
       setRefreshing(false)
     }
-  }
+  }, [fetchChartData])
 
   // ── Mount + derived state ───────────────────────────────────────────
 
@@ -195,7 +195,7 @@ const CryptoMarket = () => {
     fetchGlobalData()
     fetchNews()
     fetchTrending()
-  }, [])
+  }, [fetchData, fetchGlobalData, fetchNews, fetchTrending])
 
   useEffect(() => {
     const tagSet = new Set()

@@ -246,6 +246,7 @@ const IssueBondForm = ({ form, loading, onSubmit }) => (
         placeholder="e.g., 1000"
         style={{ width: '100%' }}
         min={1}
+        precision={0}
         size="large"
         addonAfter="USD"
       />
@@ -294,6 +295,7 @@ const IssueBondForm = ({ form, loading, onSubmit }) => (
         placeholder="e.g., 10000"
         style={{ width: '100%' }}
         min={1}
+        precision={0}
         size="large"
       />
     </Form.Item>
@@ -342,6 +344,7 @@ const PurchaseBondForm = ({ form, loading, onSubmit, bonds }) => (
         placeholder="e.g., 100"
         style={{ width: '100%' }}
         min={1}
+        precision={0}
         size="large"
       />
     </Form.Item>
@@ -390,6 +393,7 @@ const SellBondForm = ({ form, loading, onSubmit, bonds }) => (
         placeholder="e.g., 50"
         style={{ width: '100%' }}
         min={1}
+        precision={0}
         size="large"
       />
     </Form.Item>
@@ -455,6 +459,7 @@ const RedeemBondForm = ({ form, loading, onSubmit, bonds }) => (
         placeholder="e.g., 100"
         style={{ width: '100%' }}
         min={1}
+        precision={0}
         size="large"
       />
     </Form.Item>

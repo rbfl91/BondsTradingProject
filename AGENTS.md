@@ -118,7 +118,12 @@ Deployment script at `scripts/deploy.js` handles both.
 
 - All endpoints except `/health`, `/docs`, `/openapi.yaml` require `Authorization: Bearer <token>` header
 - Token configured via `AUTH_TOKEN` env variable; the API **fails closed** (all
-  private routes 401) and refuses to start without it
+  private routes 401) and refuses to start without it — both launchers:
+  `python app.py` (`validate_config()`) and gunicorn (`api/gunicorn.conf.py`
+  `on_starting` hook, N-14)
+- **Every authenticated endpoint is rate-limited** (per-IP, 30 req/min, 429 +
+  `Retry-After`; N-10). The limiter is per-process (N-07) — with multiple
+  gunicorn workers the effective limit multiplies
 - **No static token in the frontend bundle.** Delivery paths:
   - Dev: Vite proxy (`frontend/vite.config.js`) injects it server-side from
     `frontend/.env` (`AUTH_TOKEN`, untracked)
@@ -171,7 +176,7 @@ cd frontend && npm test
 
 ## Common Gotchas
 
-- **ABI Loading**: API loads ABI from `artifacts/contracts/BondTrading.sol/BondTrading.json` (Hardhat) at runtime, falling back to legacy `build/contracts/BondTrading.json`; rebuild contracts after changes
+- **ABI Loading (N-01)**: API loads ABI from `artifacts/contracts/BondTrading.sol/BondTrading.json` (Hardhat) at runtime, falling back to legacy `build/contracts/BondTrading.json`; the candidates are resolved under both the app dir and its parent (covers the flat container layout), and `CONTRACT_ABI_PATH` / `CONTRACT_ABI` env vars override. The Docker image copies `artifacts/` (build context = repo root; run `npm run build` first). Rebuild contracts after changes
 - **Default Account**: API sets `w3.eth.default_account` from `OWNER_ADDRESS` env or first provider account
 - **Port Conflicts**: API=5000, Frontend=3000, Blockchain=8545
 - **Contract Address**: Must be set in `.env` before API can interact with contracts (lowercase is fine — the API normalizes to checksum at startup)

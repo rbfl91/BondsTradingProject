@@ -197,12 +197,17 @@ const Dashboard = () => {
       <Card title="Bond Overview" style={{ marginBottom: 24 }}>
         {chartData.length > 0 ? (
           <ResponsiveContainer width="100%" height={300}>
+            {/* N-12 FIX: faceValue (thousands) and interestRate (single-digit %)
+                used to share one Y-axis, flattening the interest area. Dual
+                axes keep both series readable. */}
             <AreaChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="name" />
-              <YAxis />
+              <YAxis yAxisId="value" />
+              <YAxis yAxisId="rate" orientation="right" />
               <Tooltip />
               <Area
+                yAxisId="value"
                 type="monotone"
                 dataKey="faceValue"
                 stroke="#1890ff"
@@ -210,11 +215,12 @@ const Dashboard = () => {
                 name="Face Value"
               />
               <Area
+                yAxisId="rate"
                 type="monotone"
                 dataKey="interestRate"
                 stroke="#52c41a"
                 fill="#52c41a33"
-                name="Interest Rate"
+                name="Interest Rate (%)"
               />
             </AreaChart>
           </ResponsiveContainer>

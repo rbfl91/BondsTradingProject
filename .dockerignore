@@ -1,0 +1,17 @@
+# N-01: keep the Docker build context small. The image needs only api/ and
+# artifacts/ (see api/Dockerfile) — everything else is excluded.
+node_modules
+frontend
+cache
+test
+scripts
+.git
+.github
+artifacts-bak
+api/venv
+api/.audit-venv
+api/__pycache__
+api/api.log
+*.md
+.env
+.env.*

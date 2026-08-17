@@ -1,4 +1,6 @@
 # M-05: CI gates — contract tests, API tests, frontend tests + ESLint.
+# N-20: static-analysis gates — Slither (contracts) + Bandit (API).
+# N-01: container smoke test — the ABI artifact must load INSIDE the image.
 name: CI
 
 on:
@@ -11,36 +13,84 @@ on:
 
 jobs:
   contracts:
-    name: Smart contracts (Hardhat)
+    name: Smart contracts (Hardhat + Slither)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - run: npm ci
-      - run: npm test # 25 tests, built-in Hardhat network (no external node)
+      - run: npm test # 31 tests, built-in Hardhat network (no external node)
+      # N-20: Slither static analysis (supports the Hardhat layout; it runs
+      # `npx hardhat clean/compile` itself). Fails the gate only on HIGH
+      # impact findings; medium/low/info are advisory output.
+      - run: pip install slither-analyzer
+      - run: slither . --fail-high
 
   api:
-    name: API (pytest + OpenAPI)
+    name: API (pytest + OpenAPI + Bandit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - run: pip install -r api/requirements-dev.txt # requirements.txt + pytest
-      - run: cd api && python -m pytest test_api.py # 42 tests, hermetic (no .env / live node)
+      - run: cd api && python -m pytest test_api.py # 60 tests, hermetic (no .env / live node)
       - run: python api/validate_openapi.py
+      # N-20: Bandit static analysis on the API sources (test files excluded —
+      # their B101 assert findings are expected in a pytest suite).
+      - run: pip install bandit
+      - run: bandit api/app.py api/config.py api/validate_openapi.py api/gunicorn.conf.py
 
   frontend:
     name: Frontend (lint + vitest)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - run: cd frontend && npm ci
       - run: cd frontend && npm run lint # M-05: ESLint gate
       - run: cd frontend && npm test # vitest suite
+
+  container:
+    name: API container (N-01 ABI smoke test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run build # generate artifacts/ — the image copies it (N-01)
+      - run: docker build -f api/Dockerfile -t bond-api:smoke .
+      # N-01: the ABI artifact must be LOADABLE inside the image (before the
+      # fix, every /bond/* endpoint 500'd with "ABI artifact missing").
+      - run: >
+          docker run --rm
+          -e AUTH_TOKEN=smoke-test-token
+          -e CONTRACT_ADDRESS=0x0000000000000000000000000000000000000001
+          bond-api:smoke
+          python -c "import app as m; abi = m.get_contract_abi(); assert abi, 'ABI artifact missing in container'; print('ABI OK:', len(abi), 'entries')"
+      # The containerised API must serve /health and reach the chain code
+      # path on /bond/count (no node in the container → a clean
+      # "not connected" 500, NOT "ABI artifact missing").
+      - run: |
+          docker run -d --name bond-api-smoke -p 5000:5000 \
+            -e AUTH_TOKEN=smoke-test-token \
+            -e CONTRACT_ADDRESS=0x0000000000000000000000000000000000000001 \
+            bond-api:smoke
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:5000/health; then break; fi
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:5000/health
+          body=$(curl -s -H "Authorization: Bearer smoke-test-token" http://127.0.0.1:5000/bond/count)
+          echo "/bond/count -> $body"
+          if echo "$body" | grep -q "ABI artifact missing"; then
+            echo "FAIL: ABI artifact missing inside the container (N-01 regression)"
+            exit 1
+          fi

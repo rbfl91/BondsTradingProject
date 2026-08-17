@@ -61,7 +61,9 @@ contract BondTrading is Ownable, ReentrancyGuard, Pausable {
     uint256 public bondCount;
 
     /// @notice Address of the BondToken contract (settlement asset)
-    IBondToken public bondToken;
+    /// @dev immutable (Slither immutable-states): set once in the constructor,
+    /// reads are cheaper and the settlement asset can never be swapped.
+    IBondToken public immutable bondToken;
 
     /// @notice Maximum bonds returned by a single getBondsRange call (gas bound)
     uint256 public constant MAX_BATCH_SIZE = 50;
@@ -75,6 +77,9 @@ contract BondTrading is Ownable, ReentrancyGuard, Pausable {
     event TokensSettled(uint256 indexed bondId, uint256 amount);
 
     constructor(address _bondTokenAddress, address initialOwner) Ownable(initialOwner) {
+        // N-21: a zero token address would make every token operation revert
+        // (mis-deployed contract is unusable) — fail at deploy time instead.
+        require(_bondTokenAddress != address(0), "BondToken address cannot be zero");
         bondToken = IBondToken(_bondTokenAddress);
     }
 
@@ -204,11 +209,17 @@ contract BondTrading is Ownable, ReentrancyGuard, Pausable {
      * @dev C-02 fix: settles by burning the escrowed tokens held BY THIS
      *      CONTRACT (no allowance from the user required, no risk of burning
      *      the wrong assets). The same tokens purchased are the tokens settled.
+     *
+     * N-03 fix: redemption is deliberately NOT gated by `isActive` or the
+     *      pause flag. Once a bond has matured, holders MUST be able to
+     *      settle their escrowed principal — the owner can no longer trap
+     *      holder funds by deactivating the bond or pausing the contract.
+     *      `pause`/`deactivateBond` still block NEW purchases and secondary
+     *      sales (the trading side); they never block settlement.
      */
-    function redeemBond(uint256 _bondId, uint256 _amount) external nonReentrant whenNotPaused {
+    function redeemBond(uint256 _bondId, uint256 _amount) external nonReentrant {
         Bond storage b = bonds[_bondId];
         require(bondIssued[_bondId], "Bond does not exist");
-        require(b.isActive, "Bond is not active");
         require(block.timestamp >= b.maturityDate, "Bond has not matured yet");
         require(_amount > 0, "Amount must be > 0");
         require(bondBalances[_bondId][msg.sender] >= _amount, "Insufficient bond holdings");
@@ -266,6 +277,34 @@ contract BondTrading is Ownable, ReentrancyGuard, Pausable {
         return bondHolders[_bondId];
     }
 
+    /// @notice Number of distinct holders with a non-zero position
+    function getBondHoldersCount(uint256 _bondId) external view returns (uint256) {
+        return bondHolders[_bondId].length;
+    }
+
+    /**
+     * @notice Paged holder list (N-09): `bondHolders[_bondId][offset .. offset+limit)`.
+     *         Mirrors the getBondsRange batch view so a bond with many holders
+     *         does not force one unbounded array copy per call.
+     * @param offset  Zero-based first holder index (offset >= length → empty)
+     * @param limit   Max holders to return (0 → empty; no hard cap — the
+     *                caller paginates; use a sane limit for gas)
+     */
+    function getBondHoldersRange(uint256 _bondId, uint256 offset, uint256 limit)
+        external
+        view
+        returns (address[] memory out)
+    {
+        address[] storage holders = bondHolders[_bondId];
+        if (limit == 0 || offset >= holders.length) return new address[](0);
+        uint256 n = holders.length - offset;
+        if (limit < n) n = limit;
+        out = new address[](n);
+        for (uint256 i = 0; i < n; i++) {
+            out[i] = holders[offset + i];
+        }
+    }
+
     /**
      * @notice Batch view of bonds [start, start+count) — fixes M-02/M-02c
      *         (the API no longer needs N sequential RPC round-trips).
@@ -281,9 +320,13 @@ contract BondTrading is Ownable, ReentrancyGuard, Pausable {
         if (start == 0) start = 1;
         if (count > MAX_BATCH_SIZE) count = MAX_BATCH_SIZE;
 
-        uint256 end = start + count - 1;
-        if (end > bondCount) end = bondCount;
-        uint256 n = end >= start ? end - start + 1 : 0;
+        // N-08: clamp BEFORE any arithmetic — a crafted huge `start` used to
+        // overflow `start + count - 1` and revert this view. With
+        // `start <= bondCount` and `start + n - 1 <= bondCount` below, the
+        // loop index cannot overflow either.
+        if (count == 0 || start > bondCount) return new Bond[](0);
+        uint256 n = bondCount - start + 1;
+        if (count < n) n = count;
 
         out = new Bond[](n);
         for (uint256 i = 0; i < n; i++) {

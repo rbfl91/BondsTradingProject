@@ -1,7 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { ConfigProvider } from 'antd'
-import ptBR from 'antd/locale/pt_BR'
 import App from './App'
 import './index.css'
 
@@ -10,7 +9,10 @@ const rootElement = document.getElementById('root')
 try {
   ReactDOM.createRoot(rootElement).render(
     <React.StrictMode>
-      <ConfigProvider locale={ptBR}>
+      {/* N-16 FIX: the UI copy is English (post L-07), so the pt_BR locale
+          override (Portuguese dates/tooltips/pagination) was dropped — antd
+          defaults to English, matching the visible copy. */}
+      <ConfigProvider>
         <App />
       </ConfigProvider>
     </React.StrictMode>,

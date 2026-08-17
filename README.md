@@ -56,9 +56,23 @@ A Python REST API that provides endpoints to interact with Bond Trading smart co
 - `POST /bond/sell` - Sell a bond position to another address (no token transfer)
 - `POST /bond/redeem` - Redeem at/after maturity (burns the escrowed tokens)
 
+> **Redemption is owner-unblockable (N-03):** once a bond has matured, holders
+> can redeem regardless of `pause`/`deactivateBond` — the operator key can no
+> longer trap escrowed principal. Pause/deactivation still block *new*
+> purchases and secondary sales.
+>
+> **Transaction timeout (N-05):** the four tx endpoints wait at most ~180 s for
+> the receipt; a never-mined tx returns **504 with the `tx_hash`** so you can
+> check the explorer (the worker is released instead of stalling).
+>
+> **Numeric inputs (N-04):** `amount`/`faceValue`/`maturityDate`/
+> `interestRate`/`supply` must be whole numbers — fractional values are
+> rejected with 400 (no silent truncation). `name`/`issuer` are capped at
+> 64 characters (N-23).
+
 ### Bond Information
 - `GET /bond/<bond_id>/info` - Get bond information
-- `GET /bond/<bond_id>/holders` - Get list of bond holders
+- `GET /bond/<bond_id>/holders` - Get bond holders (paged: `?offset=&limit=`, capped at 1000/page — N-09)
 - `GET /bond/<bond_id>/holder/<holder_address>/amount` - Get amount of bonds held by a specific address
 - `GET /bond/count` - Total number of bonds issued
 - `GET /bond/all` - All bonds in one call (batch view — preferred by the frontend)
@@ -75,8 +89,18 @@ A Python REST API that provides endpoints to interact with Bond Trading smart co
 
 > Authentication: every endpoint except `/health` (and the docs routes) requires
 > `Authorization: Bearer <AUTH_TOKEN>`. Without a configured token the API fails
-> closed. Rate-limited (per-IP, `Retry-After` header on 429); set `TRUST_PROXY=true`
-> only behind a trusted reverse proxy.
+> closed. **Every authenticated endpoint is rate-limited** (per-IP, 30 req/min,
+> `Retry-After` header on 429); set `TRUST_PROXY=true` only behind a trusted
+> reverse proxy.
+>
+> **Rate limiter is per-process (N-07):** with gunicorn `--workers=2` the
+> effective limit is 2× (per worker) and state resets on restart. Acceptable
+> for the single-operator MVP; for public exposure move limiting to the reverse
+> proxy and run one worker (or a shared store).
+>
+> **`/crypto/listings?tag=` (N-19):** the tag filter runs client-side over a
+> wider upstream window (≥1000 coins) — a rare tag can still return zero rows
+> if it is outside the top ~1000 by rank.
 
 ## Setup
 
@@ -98,7 +122,9 @@ pip install -r api/requirements.txt
 >   `localStorage` only (per operator, revocable), and a 401 on any request
 >   prompts for it automatically.
 > - The API also refuses to start without `AUTH_TOKEN` set (generate one with
->   `openssl rand -hex 32`).
+>   `openssl rand -hex 32`) — for **both** launchers: `python app.py`
+>   (`validate_config()` in `__main__`) and gunicorn (`api/gunicorn.conf.py`
+>   `on_starting` hook — N-14).
 
 2. Start a local blockchain (from the repo root):
 ```bash
@@ -162,10 +188,10 @@ curl http://localhost:5000/bond/1/info \
 ## Testing
 
 ```bash
-# Smart-contract suite (25 tests, built-in Hardhat network — no node needed)
+# Smart-contract suite (31 tests, built-in Hardhat network — no node needed)
 npx hardhat test
 
-# API suite (42 tests, mocked — no .env/node needed)
+# API suite (60 tests, mocked — no .env/node needed)
 cd api && python -m pytest test_api.py
 
 # Frontend suite (vitest)
@@ -173,6 +199,13 @@ cd frontend && npm test
 
 # Frontend lint gate (ESLint, M-05)
 cd frontend && npm run lint
+
+# OpenAPI spec validation (openapi-spec-validator)
+python api/validate_openapi.py
+
+# Static analysis (N-20 — also run in CI)
+slither . --fail-high        # contracts (Slither supports the Hardhat layout)
+bandit api/app.py api/config.py api/validate_openapi.py api/gunicorn.conf.py
 ```
 
 ## Operations (runbook)
@@ -190,10 +223,37 @@ One operator key signs every transaction; there is no multi-user self-custody.
    the static files behind the same reverse proxy as the API (or a proxy in
    front of it) that injects `Authorization: Bearer <AUTH_TOKEN>` on `/api/*`.
    Never ship a build that embeds the token.
+
+   **N-13 — SPA catch-all rewrite (required for deep links):** every non-API
+   path must serve `index.html` so client-side routing (`/bond/:id`,
+   `/crypto`) survives refresh/direct access:
+   ```nginx
+   # nginx
+   location / { try_files $uri /index.html; }
+   location /api/ { proxy_pass http://127.0.0.1:5000/; }
+   ```
+   ```json
+   // Vercel vercel.json
+   { "rewrites": [{ "source": "/(?!api/|assets/|index.html|openapi.yaml|docs).*", "destination": "/index.html" }] }
+   ```
+   ```
+   # Netlify _redirects
+   /*  /index.html  200
+   ```
 4. **Rate limiting / proxying:** set `TRUST_PROXY=true` only behind a trusted
-   reverse proxy; keep the API off the public internet otherwise.
+   reverse proxy; keep the API off the public internet otherwise. The built-in
+   limiter is per-process (N-07) — for public exposure move limiting to the
+   proxy and run one worker.
 5. **ABI artifact:** after contract changes, run `npm run build` in the repo
-   root so the API can load the ABI artifact (fail-fast, M-01).
+   root so the API can load the ABI artifact (fail-fast, M-01/N-01). In the
+   Docker image the artifact ships at `/app/artifacts/` and the build context
+   must be the repo root (see `api/Dockerfile`); `CONTRACT_ABI_PATH` / `CONTRACT_ABI` env vars override the path.
+6. **Nonce & gas (N-22):** the API signs with a single owner key and uses
+   provider-default gas estimation. Fine for the single-operator MVP, but
+   queued txs bump the nonce and the next send can fail — wait for the pending
+   tx to mine (or replace it with a higher gas price), then re-send. A
+   multi-user deployment needs an explicit nonce manager and gas-price
+   strategy.
 
 ## Local Development
 
