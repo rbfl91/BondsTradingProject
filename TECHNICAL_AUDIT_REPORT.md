@@ -219,6 +219,42 @@ The full historical remediation table (finding-by-finding outcomes with commit r
 8. N-20: add Slither + Bandit to CI.
 9. Carry-over: 3-tier integration test; `app.py` split; per-user identity decision.
 
+### 7.1 Remediation Status (applied 2026-08-18 — commit `1ea0949`)
+
+All findings N-01…N-23 remediated in a single commit; full suites re-run green
+(31/31 contract, 60/60 API, 22/22 frontend, OpenAPI valid, Slither clean at
+`--fail-high`, Bandit clean on API sources).
+
+| Finding | Status | Where |
+|---------|--------|-------|
+| N-01 (High) | **Fixed** | `get_contract_abi()` resolves under app dir + parent; `CONTRACT_ABI_PATH`/`CONTRACT_ABI` env override; `Dockerfile` copies `artifacts/`; CI `container` job asserts the ABI loads **inside the image** + `/health` serves (regression gate) |
+| N-02 | **Fixed** | Working tree committed; `AUDIT_CLOSURE_CERTIFICATE.md` restored |
+| N-03 | **Fixed** | `redeemBond` no longer gated by `isActive`/`whenNotPaused` — matured bonds settle even when paused/deactivated; purchase/sell still gated; 6 new contract tests |
+| N-04 | **Fixed** | `_int_field` strict integer coercion (bools/fractions → 400) on all tx handlers; frontend `precision={0}`; OpenAPI `integer` schema |
+| N-05 | **Fixed** | `_wait_for_receipt` bounded (~180 s) → 504 with `tx_hash` (hex-normalised); OpenAPI 504 documented |
+| N-06 | **Fixed** | TTL-cached connection probe (5 s ok / exponential backoff to 60 s fail) |
+| N-07 | **Documented** | README runbook: limiter is per-process; move to proxy + single worker for public exposure |
+| N-08 | **Fixed** | `getBondsRange` overflow-safe clamping + huge-start test |
+| N-09 | **Fixed** | `getBondHoldersRange`/`getBondHoldersCount` contract views; `/bond/<id>/holders?offset=&limit=` (≤1000, `total` field) |
+| N-10 | **Fixed** | `_rate_limit_gate()` on **all** authenticated endpoints (views included); OpenAPI 429 responses added |
+| N-11 | **Fixed** | `_log_safe()` on path/X-Forwarded-For/tag/upstream-error/payload log lines |
+| N-12 | **Fixed** | Dashboard dual Y-axis (value + rate) chart |
+| N-13 | **Documented** | README runbook: SPA catch-all rewrite recipes (nginx/Vercel/Netlify) |
+| N-14 | **Fixed** | `api/gunicorn.conf.py` `on_starting` → `validate_config()` fail-fast; both launchers now refuse to boot without `AUTH_TOKEN` |
+| N-15 | **Fixed** | Pins refreshed: flask 3.1.3, flask-cors 6.0.5, requests 2.34.2, gunicorn 26.0.0 (Unix-only — container target), pyyaml 6.0.3, dotenv 1.2.3, openapi-spec-validator 0.9.0; suite re-verified green |
+| N-16 | **Fixed** | antd pt_BR locale removed from `main.jsx` |
+| N-17 | **Fixed** | `defusedxml` for CoinDesk RSS (stdlib fallback); Bandit B314/B405 annotated |
+| N-18 | **Fixed** | axios timeout 30 s → 40 s (above the 30 s CMC upstream timeout) |
+| N-19 | **Mitigated + documented** | Tag filter scans a wider upstream window (≥1000 coins); README notes the residual top-1000 edge case |
+| N-20 | **Fixed** | CI: `slither . --fail-high` (contracts) + `bandit` on API sources; `bondToken` made `immutable` (Slither `immutable-states`) |
+| N-21 | **Fixed** | Zero-address constructor guard + deploy-revert test |
+| N-22 | **Documented** | README runbook: single-operator nonce/gas strategy + failure recovery; multi-user needs a nonce manager |
+| N-23 | **Fixed** | 64-char cap on `name`/`issuer` (400); OpenAPI `maxLength` |
+| N-24 (Info) | **N/A** | Informational; no action |
+
+Remaining carry-over (out of scope for this remediation): 3-tier integration
+test, `app.py` split, per-user identity decision (see §7 item 9).
+
 ---
 
 ## 8. Appendices
