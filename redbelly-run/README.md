@@ -271,11 +271,11 @@ file is the repo-root `index.html` (docs for the game live in this
 that touches it redeploys automatically. (This README is also reachable
 at `/redbelly-run/README.md` on the site.)
 
-> **What the public URL does NOT include:** the drop-in `music*.mp3` files
-> (copyrighted — see above). The public build plays the built-in
-> synthesized chiptunes, which is the intended fallback. To play locally
-> with the Koshiro/Sega drop-ins, copy the `music1..7.mp3` files next to
-> the HTML on your own machine.
+> **Music:** the `music1..7.mp3` tracks are committed to the repo root
+> and play in the public build (the game probes them relative to the page
+> URL). See the Music section above for the licensing caveat — if the
+> tracks are ever taken down, the game silently falls back to the built-in
+> synthesized chiptunes.
 
 ## Integrating into the platform
 
