@@ -264,10 +264,12 @@ msedge --headless=new --window-size=1280,720 --virtual-time-budget=6000 \
 ## Hosting this build (GitHub Pages)
 
 This game is hosted inside the BondsTradingProject repo: the playable
-file is `redbelly-run/index.html` (this folder), and
-`.github/workflows/deploy.yml` publishes it as the site root, so the game
-lives at `https://rbfl91.github.io/BondsTradingProject/`. Any push to
-`master` redeploys automatically.
+file is the repo-root `index.html` (docs for the game live in this
+`redbelly-run/` folder). GitHub Pages serves the repo root from the
+`master` branch, so the game lives at
+`https://rbfl91.github.io/BondsTradingProject/` — any push to `master`
+that touches it redeploys automatically. (This README is also reachable
+at `/redbelly-run/README.md` on the site.)
 
 > **What the public URL does NOT include:** the drop-in `music*.mp3` files
 > (copyrighted — see above). The public build plays the built-in
