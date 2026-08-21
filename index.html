@@ -1095,6 +1095,11 @@ bindTouch('tDash', ()=>{
 canvas.addEventListener('pointerdown', ev=>{
   ev.preventDefault(); ensureAudio();
   if (state === 'title') startRun();
+  else if (state === 'paused'){
+    // the auto-pause (blur / screen lock) has no keyboard on a phone —
+    // a tap on the play area is the way out
+    state = 'play'; if (fileMusic) fileMusic.play().catch(()=>{});
+  }
   else if ((state === 'win' || state === 'gameover') && performance.now() - screenAt > 900) startRun();
 });
 
@@ -1981,10 +1986,9 @@ function render(){
   drawHUD();
   if (state==='title') drawTitle();
   if (state==='stclear') drawStageClear();
-  if (state==='paused') drawCenterPanel('PAUSED', [
-    'ESC / P — resume',
-    'R — restart', 'M — mute',
-  ]);
+  if (state==='paused') drawCenterPanel('PAUSED', IS_TOUCH
+    ? ['tap anywhere — resume', 'R — restart', 'M — mute']
+    : ['ESC / P — resume', 'R — restart', 'M — mute']);
   if (state==='gameover') drawGameOver();
   if (state==='win') drawWin();
   if (flashMsgT > 0){
