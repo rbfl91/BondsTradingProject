@@ -270,9 +270,9 @@ its root via GitHub Pages:
 - **`https://rbfl91.github.io/RedbellyRun/`** — share this URL
 - repo contents: `index.html` (the game), `music1..7.mp3` (the
   per-zone drop-ins, probed relative to the page URL), `README.md`
-- the dev working copy lives here (`waiting-room/index.html` =
-  `index.html` on the site); to ship a build: copy the HTML over,
-  commit, push
+- the dev working copy lives on the developer machine
+  (`Redbelly MVP/waiting-room/`); to ship a build: copy the fresh HTML
+  over `index.html` in the `RedbellyRun` repo, commit, push
 
 A **mirror** of the game (same `index.html` + mp3s at the repo root)
 still lives in the `BondsTradingProject` repo, so the older URL
