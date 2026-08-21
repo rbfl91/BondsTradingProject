@@ -17,14 +17,16 @@
   #touch{position:fixed;inset:0;display:none;pointer-events:none;z-index:10;}
   #touch.on{display:block;}
   .tbtn{position:absolute;pointer-events:auto;border-radius:50%;
-    background:rgba(255,255,255,.10);border:2px solid rgba(255,255,255,.35);
-    color:rgba(255,255,255,.85);display:flex;align-items:center;justify-content:center;
-    user-select:none;-webkit-user-select:none;touch-action:none;}
-  .tbtn:active{background:rgba(255,255,255,.30);}
+    background:rgba(255,255,255,.12);border:2px solid rgba(255,255,255,.45);
+    color:rgba(255,255,255,.9);display:flex;flex-direction:column;align-items:center;
+    justify-content:center;user-select:none;-webkit-user-select:none;touch-action:none;}
+  .tbtn:active{background:rgba(255,255,255,.32);}
+  .tlabel{font-size:9px;font-weight:bold;letter-spacing:1px;line-height:1;
+    margin-top:2px;color:rgba(255,255,255,.75);}
   #tLeft {left:14px;  bottom:14px;width:72px;height:72px;font-size:26px;}
   #tRight{left:100px; bottom:14px;width:72px;height:72px;font-size:26px;}
-  #tJump {right:14px; bottom:14px;width:84px;height:84px;font-size:30px;}
-  #tDash {right:112px;bottom:26px;width:64px;height:64px;font-size:20px;}
+  #tJump {right:14px; bottom:14px;width:84px;height:84px;font-size:28px;}
+  #tDash {right:112px;bottom:22px;width:72px;height:72px;font-size:24px;}
   #hint{position:absolute;top:8px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,.0);font-size:12px;pointer-events:none;}
 </style>
 </head>
@@ -34,8 +36,8 @@
   <div id="touch">
     <div class="tbtn" id="tLeft">&#9664;</div>
     <div class="tbtn" id="tRight">&#9654;</div>
-    <div class="tbtn" id="tDash">&#10227;</div>
-    <div class="tbtn" id="tJump">&#8593;</div>
+    <div class="tbtn" id="tDash"><span>&#10227;</span><span class="tlabel">DASH</span></div>
+    <div class="tbtn" id="tJump"><span>&#8593;</span><span class="tlabel">JUMP</span></div>
   </div>
 </div>
 <script>
@@ -4747,7 +4749,12 @@ function drawTitle(){
   ctx.font = 'bold 14px Consolas, monospace';
   ctx.fillStyle = 'rgba(255,255,255,0.9)';
   const cx = VIEW_W/2;
-  const L = [
+  const L = IS_TOUCH ? [
+    ['◀  ▶', 'move'],
+    ['↑', 'jump (hold = higher)'],
+    ['⚡ ×3', 'spin dash — tap ×3, release'],
+    ['F + G + H', 'cheat: cut to the next zone'],
+  ] : [
     ['A / D', 'move'],
     ['W / SPACE', 'jump (hold = higher)'],
     ['SHIFT ×3', 'spin dash (tap, tap, tap, release)'],
