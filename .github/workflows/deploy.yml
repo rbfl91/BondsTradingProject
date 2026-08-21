@@ -1,0 +1,44 @@
+# Deploys the Redbelly Run game (redbelly-run/index.html) to GitHub Pages.
+# Site root: https://<user>.github.io/BondsTradingProject/
+#
+# Only the game's single HTML file is published — the trading project's
+# frontend/build artifacts are NOT served by the site. Music is intentionally
+# NOT included (the mp3s are copyrighted; the game falls back to its built-in
+# synthesized chiptunes, see redbelly-run/README.md "Music").
+
+name: Deploy Redbelly Run to GitHub Pages
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage site
+        run: |
+          mkdir -p site
+          cp redbelly-run/index.html site/index.html
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4
