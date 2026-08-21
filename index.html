@@ -1081,7 +1081,15 @@ function bindTouch(id, down, up){
 bindTouch('tLeft', ()=>keys.left=true,  ()=>keys.left=false);
 bindTouch('tRight',()=>keys.right=true, ()=>keys.right=false);
 bindTouch('tJump', ()=>{ keys.jump=true; jumpBuf=JBUF; }, ()=>{ keys.jump=false; if(player.vy<-160&&!player.dying) player.vy*=0.45; });
-bindTouch('tDash', ()=>{ dashEdge=true; keys.dash=true; }, ()=>{ keys.dash=false; releaseDash(); });
+/* the touch DASH button is a single tap: full charge on press, launch on
+   release (the keyboard keeps the faithful Shift ×3 tap-tap-tap flow) */
+bindTouch('tDash', ()=>{
+  const p = player;
+  if (p.ground && !p.dying && state==='play' && Math.abs(p.vx) < 80){
+    p.charge = 3; // one tap = fully charged
+    AudioSys.dashTick(p.charge);
+  }
+}, releaseDash);
 /* tap the play area: start from the title, restart after win/gameover
    (the 0.9 s guard stops an accidental tap from skipping the win screen) */
 canvas.addEventListener('pointerdown', ev=>{
@@ -4752,7 +4760,7 @@ function drawTitle(){
   const L = IS_TOUCH ? [
     ['◀  ▶', 'move'],
     ['↑', 'jump (hold = higher)'],
-    ['⚡ ×3', 'spin dash — tap ×3, release'],
+    ['⚡', 'spin dash — one tap'],
     ['F + G + H', 'cheat: cut to the next zone'],
   ] : [
     ['A / D', 'move'],

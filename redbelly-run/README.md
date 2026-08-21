@@ -36,8 +36,8 @@ semi-transparent thumb buttons instead of needing a keyboard:
 
 - **◀ / ▶** bottom-left — move
 - **↑** (big) bottom-right — jump (hold = higher)
-- **⚡ DASH** (labeled, above the jump button) — spin dash: tap the
-  button 3 times, release to launch (the mobile Shift×3)
+- **⚡ DASH** (labeled, above the jump button) — spin dash: tap once
+  to launch (the mobile Shift×3, condensed to a single tap on touch)
 
 The buttons are anchored to the *screen* corners, not the canvas: in
 **portrait** the game is a letterboxed strip and the buttons sit in the
