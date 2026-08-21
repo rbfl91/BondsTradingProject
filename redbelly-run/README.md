@@ -261,22 +261,23 @@ msedge --headless=new --window-size=1280,720 --virtual-time-budget=6000 \
   --screenshot=shots/play.png "file:///<path>/waiting-room/index.html?autostart&x=2150"
 ```
 
-## Hosting this build (GitHub Pages)
+## Hosting (live public build)
 
-This game is hosted inside the BondsTradingProject repo: the playable
-file is the repo-root `index.html` (docs for the game live in this
-`redbelly-run/` folder). GitHub Pages serves the repo root from the
-`master` branch, so the game lives at
-`https://rbfl91.github.io/BondsTradingProject/` — any push to `master`
-that touches it redeploys automatically. (This README is also reachable
-at `/redbelly-run/README.md` on the site.)
+The canonical home of the live game is the dedicated
+**`RedbellyRun`** repo (`github.com/rbfl91/RedbellyRun`), which serves
+its root via GitHub Pages:
 
-> **Music:** the `music1..7.mp3` tracks are committed to the repo root
-> and play in the public build (the game probes them relative to the page
-> URL). See the Music section above for the licensing caveat — if the
-> tracks are ever taken down, the game silently falls back to the built-in
-> synthesized chiptunes.
+- **`https://rbfl91.github.io/RedbellyRun/`** — share this URL
+- repo contents: `index.html` (the game), `music1..7.mp3` (the
+  per-zone drop-ins, probed relative to the page URL), `README.md`
+- the dev working copy lives here (`waiting-room/index.html` =
+  `index.html` on the site); to ship a build: copy the HTML over,
+  commit, push
 
+A **mirror** of the game (same `index.html` + mp3s at the repo root)
+still lives in the `BondsTradingProject` repo, so the older URL
+`https://rbfl91.github.io/BondsTradingProject/` keeps working. If it is
+ever removed there, only the `RedbellyRun` URL remains.
 ## Integrating into the platform
 
 - Drop the `waiting-room/` folder anywhere you can serve static files.
