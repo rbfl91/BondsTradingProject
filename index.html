@@ -977,26 +977,69 @@ const AudioSys = {
     this.muted = !this.muted;
     if (this.master) this.master.gain.value = this.muted ? 0 : 0.8;
     if (this.muted) this.next = this.ctx ? this.ctx.currentTime + 0.1 : 0;
-    if (fileMusic) fileMusic.muted = this.muted;
+    for (const a of musicEls) a.muted = this.muted; // mute the whole pool
   }
 };
 
 /* Optional drop-in music (per zone): music1.mp3 for HILL … music7.mp3
    for FINAL ZONE — placed next to index.html. A found file replaces the
-   built-in synth loop for its zone; if absent, the synth loop plays. */
-let fileMusic = null;
-function startStageMusic(i){
-  if (fileMusic){ try { fileMusic.pause(); } catch(e){} fileMusic = null; }
+   built-in synth loop for its zone; if absent, the synth loop plays.
+
+   iPhone hardening: exactly seven Audio elements are created ONCE and
+   reused for every zone swap and restart. (The old code created a fresh
+   element per zone; Safari caps the number of live HTMLMediaElements per
+   page and the cap varies between iOS versions — that is why some phones
+   lost or skipped tracks from Marble Zone on.) All elements are silently
+   gesture-primed on the first user tap (primeFileMusic), which unlocks
+   per-element playback on iOS; a refused play() retries once and then
+   falls back to the synth, so music never just stops mid-run. */
+const musicEls = [];
+for (let i = 0; i < 7; i++){
   const a = new Audio('music' + (i+1) + '.mp3');
   a.preload = 'auto'; a.loop = true; a.volume = 0.6; a.muted = AudioSys.muted;
-  a.addEventListener('canplay', () => {
-    if (fileMusic) return; // a newer zone already took over
-    fileMusic = a;
-    /* file found: stop the built-in synth loop so they don't play together */
-    if (AudioSys.musicTimer){ clearInterval(AudioSys.musicTimer); AudioSys.musicTimer = null; }
-    a.play().catch(()=>{});
-  }, {once:true});
-  a.addEventListener('error', () => { AudioSys.startMusic(); }, {once:true});
+  musicEls.push(a);
+}
+let fileMusic = null;   // element that is playing (or trying) right now
+let musicZone = -1;     // zone index of that element
+let musicPrimed = false;
+/* Priming runs inside ensureAudio(), which only ever fires from a user
+   gesture: a silent (muted) play→pause unlocks iOS's per-element media
+   permission. The currently-assigned track (fileMusic) is left alone. */
+function primeFileMusic(){
+  if (musicPrimed) return;
+  musicPrimed = true;
+  musicEls.forEach(a => {
+    a.muted = true;
+    const p = a.play();
+    if (p && p.then) p.then(() => {
+      if (fileMusic !== a){ a.pause(); a.currentTime = 0; }
+      a.muted = AudioSys.muted;
+    }, () => { a.muted = AudioSys.muted; });
+  });
+}
+function startStageMusic(i){
+  const a = musicEls[i];
+  if (musicZone === i && fileMusic === a && !a.paused) return; // already this track
+  musicZone = i;
+  const cur = fileMusic;
+  fileMusic = a;
+  if (cur && cur !== a){
+    try { cur.pause(); cur.currentTime = 0; } catch(e){}
+  }
+  const tryPlay = (left) => {
+    if (musicZone !== i || fileMusic !== a) return; // a newer zone took over
+    const p = a.play();
+    if (p && p.then) p.then(() => {
+      if (musicZone !== i || fileMusic !== a) return;
+      /* track is audible: stop the built-in synth loop so they don't double up */
+      if (AudioSys.musicTimer){ clearInterval(AudioSys.musicTimer); AudioSys.musicTimer = null; }
+    }, () => {
+      if (musicZone !== i || fileMusic !== a) return;
+      if (left > 0) setTimeout(() => tryPlay(left - 1), 350); // transient refusal
+      else if (state === 'play') AudioSys.startMusic();        // never go silent in-run
+    });
+  };
+  tryPlay(1);
 }
 
 /* ---------------- input ---------------- */
@@ -1010,7 +1053,8 @@ const KEYMAP = {
   ShiftLeft:'dash', ShiftRight:'dash', KeyX:'dash', KeyJ:'dash',
 };
 function ensureAudio(){
-  AudioSys.init();
+  primeFileMusic(); // user gesture: silently unlock the seven track elements
+  AudioSys.init();  // first gesture: synth loop + zone-1 track
   if (AudioSys.ctx && AudioSys.ctx.state === 'suspended') AudioSys.ctx.resume();
 }
 function onKeyDown(e){
@@ -1026,7 +1070,7 @@ function onKeyDown(e){
   if (k==='KeyM'){ AudioSys.toggleMute(); showFlash('MUTED', 0.8); }
   if (k==='Escape' || k==='KeyP'){
     if (state==='play'){ state = 'paused'; if (fileMusic) fileMusic.pause(); }
-    else if (state==='paused'){ state = 'play'; if (fileMusic) fileMusic.play().catch(()=>{}); }
+    else if (state==='paused'){ state = 'play'; if (fileMusic) fileMusic.play().catch(()=> AudioSys.startMusic()); }
   }
   /* F+G+H cheat: skip to the next zone (final zone: CASH OUT) */
   if (k==='KeyF') cheatKeys.F = true;
@@ -1098,7 +1142,7 @@ canvas.addEventListener('pointerdown', ev=>{
   else if (state === 'paused'){
     // the auto-pause (blur / screen lock) has no keyboard on a phone —
     // a tap on the play area is the way out
-    state = 'play'; if (fileMusic) fileMusic.play().catch(()=>{});
+    state = 'play'; if (fileMusic) fileMusic.play().catch(()=> AudioSys.startMusic());
   }
   else if ((state === 'win' || state === 'gameover') && performance.now() - screenAt > 900) startRun();
 });
@@ -4996,6 +5040,11 @@ if (typeof window !== 'undefined'){
     teleport(x, y){ player.x = x; if (y !== undefined) player.y = y; player.vx = 0; player.vy = 0; },
     setLives(n){ lives = n; },
     killAllEnemies(){ ENEMIES.forEach(e => e.dead = true); },
+    /* music layer (pool + fallback regression tests) */
+    musicEl: () => fileMusic,
+    musicEls,
+    startStageMusic,
+    get audioSys(){ return AudioSys; },
     /* zone 7 QA: boss + machine state (null outside FINAL ZONE) */
     bossZone(){
       if (!BOSS) return null;

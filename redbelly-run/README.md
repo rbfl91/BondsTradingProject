@@ -220,7 +220,14 @@ Seven optional drop-in slots, checked on first user gesture (works on
   built-in 190 BPM tense industrial loop if missing.
 - `music7.mp3` — plays in **FINAL ZONE** (zone 7). Falls back to the
   built-in 92 BPM slow, menacing boss-drone loop if missing.
-- `.ogg` / `.wav` / `.m4a` variants are also probed (`music1.***`, …).
+### iPhone hardening
+Safari caps the number of live HTMLMediaElements per page, and the cap
+differs between iOS versions. So the game creates exactly seven track
+elements (one per zone) once, reuses them across every zone swap and
+restart, and silently primes all seven on the first tap. If a play() call
+is refused (interruption / autoplay rules), the game retries once, then
+falls back to the zone’s synth loop — music never just stops mid-run
+(e.g. on Marble Zone).
 
 `M` mutes everything; `Esc`/`P` pauses the file track.
 
